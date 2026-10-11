@@ -377,7 +377,7 @@ Record **actual mock provider entry counts and actual DOM send-control `click()`
 
 Positive proof requires exact actor/document fate (no remaining runnable callbacks), owner-epoch fencing, a corroborated transcript and journaled publication identities, plus audited effect ordering. A user closing a tab or pressing Reset alone cannot establish whether a result reached Gemini. If any prior issuance remains acceptance-unknown, **no owner release or same-conversation automation reuse, potentially permanently**. A new, separately identified conversation remains subject to §5.8's installation-wide actor-quiescence safeguards. There is no manual override in Phase 0.
 
-**Typed failure codes for writing-plans:** `CONVERSATION_UNBOUND`, `INITIAL_PROMPT_MISMATCH`, `TURN_UNATTRIBUTABLE`, `ROLE_AMBIGUOUS`, `MODEL_NOT_COMPLETE`, `CALL_GRAMMAR_INVALID`, `MULTIPLE_CALL_CANDIDATES`, `MODEL_REFUSAL`, `FINAL_ORACLE_FAILED`, `FINAL_ORACLE_INDETERMINATE`, `AMBIGUOUS_CALL_SHAPE`, `SENDER_NOT_SINGLETON`, `COMPOSER_DIGEST_MISMATCH`, `PUBLICATION_UNKNOWN`, `PUBLICATION_ACCEPTANCE_UNKNOWN`, `OWNER_EPOCH_STALE`, `CANCEL_EFFECT_UNSETTLED`, `RECOVERY_QUARANTINED`. Preserve distinct `PERMIT_OUTSTANDING`, `UI_SEND_ISSUED`, and `OBSERVED_ACCEPTED`.
+**Typed failure codes for writing-plans:** `CONVERSATION_UNBOUND`, `INITIAL_PROMPT_MISMATCH`, `TURN_UNATTRIBUTABLE`, `ROLE_AMBIGUOUS`, `MODEL_NOT_COMPLETE`, `CALL_GRAMMAR_INVALID`, `MULTIPLE_CALL_CANDIDATES`, `MODEL_REFUSAL`, `AMBIGUOUS_CALL_SHAPE`, `SENDER_NOT_SINGLETON`, `COMPOSER_DIGEST_MISMATCH`, `PUBLICATION_UNKNOWN`, `PUBLICATION_ACCEPTANCE_UNKNOWN`, `OWNER_EPOCH_STALE`, `CANCEL_EFFECT_UNSETTLED`, `RECOVERY_QUARANTINED`. Preserve distinct `PERMIT_OUTSTANDING`, `UI_SEND_ISSUED`, and `OBSERVED_ACCEPTED`. **Evaluation-only** verdict reasons include `FINAL_ORACLE_FAILED`, `FINAL_ORACLE_INDETERMINATE`, `HUMAN_REVIEW_REQUIRED` and `SCORING_DEADLINE_EXCEEDED`; these never authorize or change Run states.
 
 
 ## 6. UI-safety and failure taxonomy
@@ -456,7 +456,7 @@ Formal proof threshold inherited from Requirements: **S-A at least 10 live trial
 | Publication | Distinct durable intent, single-use nonce, exact composer digest and one synchronous `click()` | Execution dedupe alone, retry-on-timeout, ACK=delivery assumption |
 | Cancellation | Delay ACK until actor quiescence plus observed accepted result / definitive no-issuance | Immediate ACK on permit close, mere worker heartbeat |
 | Transport | No native local host in Phase 0 | Premature commitment to Native Messaging/MCP |
-| Evaluation | Two frozen contrast scenarios + deterministic oracle with `FINAL_EVALUATING → COMPLETE` only on PASS | Fixed happy-path controller, Gemini self-grading or invalid output treated as final |
+| Evaluation | Two contrast scenarios; online `FINAL_SAFETY_CHECK → COMPLETE` only on Q/A and independent offline oracle/human rubric for **trial PASS** | Hard-coded model tool choice, online oracle dependence, Gemini self-grading |
 
 ### 9.1 Open blocking questions
 
@@ -469,7 +469,8 @@ Formal proof threshold inherited from Requirements: **S-A at least 10 live trial
 - **B-07 Initial handoff:** Is the prefilled initial prompt exact and user-sent turn independently observable in Gemini Web?
 - **B-08 Singleton/async page behavior:** Can a single effect actor be proven amid reinjection/duplicate listeners and can page-side async send settle be observed?
 - **B-09 Recovery:** Can **both** positive actor quiescence Q and accepted/not-issued settlement A be established per effect? An `ISSUED` but acceptance-unknown result **always keeps the old conversation quarantined**, irrespective of Q alone.
-- **B-10 Outcome:** Can DOM structure and frozen structural call-signature scans classify model outputs without false final success? If not, no `COMPLETE`; DP-17 blocks the trial.
+- **B-10 Outcome:** Can DOM structure and frozen call signatures distinguish invalid tool text from a normal final for **safe operational closure**? If not, no `COMPLETE`; DP-17 blocks the trial. Content correctness is scored offline.
+- **B-11 Offline grading:** Can the independent grader score a sealed Run trace and optional human rubric without altering Run state or dropping unsuccessful attempts? If not, DP-18 and Formal Evaluation Gate remain BLOCKED.
 
 If **B-01/B-02/B-03/B-07/B-08** cannot be justified with the approved UI/browser constraints, they are **Major design blockers**, not excuses to weaken Requirements.
 
@@ -481,10 +482,10 @@ If **B-01/B-02/B-03/B-07/B-08** cannot be justified with the approved UI/browser
 | RG-003-DES-002 | Major | §3.2–3.3: conversation proof, predecessor input, role and completion | B-02/B-03, DP-01/02 |
 | RG-003-DES-003 | Major | §4.1: entire-turn grammar, exact normalization, ambiguous sample | B-05, DP-03/15 |
 | RG-003-DES-004 | Major | §3.1: one user-sent initial prompt, exclusive owner and first-turn linkage | B-07, DP-13 |
-| RG-003-DES-005 | Minor (PARTIALLY RESOLVED in prior review) | §5.5/5.6/5.8: **Q actor quiescence and A acceptance are independent**; `ISSUED` alone cannot release same-conversation owner | B-09, DP-14 |
-| RG-003-DES-006 | Major (NEW) | §4.3/§5.2/§7: deterministic four-way AssistantOutcome, invalid-call precedence, oracle-gated final success / complete terminal | B-10, DP-09/17 |
+| RG-003-DES-005 | Minor (**RESOLVED in latest independent review**) | §5.5/5.6/5.8 Q/A ownership and cancel settlement contract retained unchanged | B-09, DP-14 |
+| RG-003-DES-006 | Major (**PARTIALLY RESOLVED in latest review**) | §4.3/§5.2/§7 online `FINAL_ANSWER/COMPLETE` vs grader-owned PASS/FAIL, human PENDING, no fixture-label bridge branching | B-10/B-11, DP-09/17/18 |
 
-**Review history:** The prior independent review marked DES-001–004 RESOLVED, DES-005 PARTIALLY RESOLVED and identified DES-006 as NEW Major. **The author has addressed DES-005/006 in this revision, not independently verified closure.** Design Gate remains BLOCKED until a fresh independent review of the exact new committed baseline.
+**Review history:** The latest independent review marked **DES-001–005 RESOLVED** and **DES-006 PARTIALLY RESOLVED**, with no new finding. This author addressed **only DES-006's online/offline responsibility gap**. Design Gate remains BLOCKED until fresh independent review; this revision is not an approval.
 
 ## 10. Review gates and authorization limits
 
@@ -501,9 +502,10 @@ If **B-01/B-02/B-03/B-07/B-08** cannot be justified with the approved UI/browser
 - Is the **last actual UI send issuance** protected from cancel acknowledgment races, not merely a background permission check?
 - Does the distinct `PublicationIntent` guarantee at-most-once **issuance**, including duplicates and lost acknowledgments, without claiming exactly-once delivery?
 - Are completion/identity browser observations sufficient, or does the design implicitly rely on unstable guesses?
-- Can S-A/S-B and a frozen oracle distinguish model-chosen actions from extension-scripted steps, and does **§4.3 only classify a final answer after oracle PASS**?
+- Is online `FINAL_ANSWER → COMPLETE` determined only by safe Q/A and causal evidence, with no oracle? Does only the separate independent grader, including frozen human review if needed, assign trial PASS/FAIL?
+- Do S-A/S-B expected paths and fixture labels remain evaluation-only data, never a tool-selection rule in the Coordinator?
 - Does a quiescent sender with `ISSUED` but unconfirmed acceptance **remain quarantined**, with no Cancel ACK or same-conversation owner release?
 - Do all AC-01–12 have credible test evidence and clear BLOCKED conditions?
 - Are permissions/policy and phase gates respected, with no implementation before approval?
 
-**Author self-review is not independent approval.** The Implementation/Spike Plan does **not** exist yet; its future writing-plans handoff must adopt the exact identities, error codes, event boundaries, failure categories and DP-01–17 evidence definitions in this Design, not invent substitutes. **No source files, extension code, AWS credentials or live Gemini automation are authorized or created by this document.**
+**Author self-review is not independent approval.** The Implementation/Spike Plan does **not** exist yet; its future writing-plans handoff must adopt the exact identities, error codes, event boundaries, failure categories and DP-01–18 evidence definitions in this Design, not invent substitutes. **No source files, extension code, AWS credentials or live Gemini automation are authorized or created by this document.**
