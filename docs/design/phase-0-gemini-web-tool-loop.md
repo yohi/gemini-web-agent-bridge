@@ -393,9 +393,9 @@ Positive proof requires exact actor/document fate (no remaining runnable callbac
 | Duplicate publisher / effect listener or lost UI acknowledgment | Singleton/nonce gate: actual click at most once; `INDETERMINATE` without resend |
 | Cancel while send permit outstanding | Cancel remains **pending** until positive actor quiescence plus browser-visible result acceptance (or definitive `NOT_ISSUED`) |
 | Old owner epoch or another tab | Deny dispatch/send |
-| Gemini refusal or unrecognized contract, invalid/malformed call, or wrong next tool | §4.3 outcome classification; refusal/invalid cannot fall through to final success; count failed trial |
-| Normal completed final answer without a call | Enter `FINAL_EVALUATING`; oracle PASS and all Q/A obligations proven ⇒ `FINAL_ANSWER → COMPLETE`; else BLOCKED |
-| Evidence IDs present but fabricated numbers/resource claims | Oracle failure ⇒ `INVALID_OUTPUT / FINAL_ORACLE_FAILED`, terminal BLOCKED; no execution |
+| Gemini refusal or malformed/denied call | Coordinator records `MODEL_REFUSAL` / `INVALID_OUTPUT`; separate Grader records failed trial. No normal-final fallthrough |
+| Normal completed answer without call-like material | `FINAL_SAFETY_CHECK → FINAL_ANSWER → COMPLETE` only on Q/A settlement; formal correctness scored independently |
+| Normal final with fabricated costs or wrong tool choice | May operationally `COMPLETE`; independent grader marks trial `FAIL`, never reopens Run |
 | `ISSUED` but not `OBSERVED_ACCEPTED` even with quiescent actor | Acceptance unknown ⇒ `INDETERMINATE`, no Cancel ACK or same-conversation owner release |
 | Additional manual user input, initial prompt mismatch or regeneration | Invalidate predecessor binding; `BLOCKED` |
 | Composer digest mismatch / unverified singleton sender | No click; `BLOCKED` |
@@ -431,7 +431,7 @@ Formal proof threshold inherited from Requirements: **S-A at least 10 live trial
 | DP-06 | **FR-08/20/21**, AC-02/06 | §5.5 single doc effect actor, duplicate listeners, exact composer digest, **actual click count** and lost ACK |
 | DP-07 | FR-17/19/21, AC-06/08 | §5.6 Cancel ACK after positive actor quiescence / observed acceptance; race forcing at **actual click** |
 | DP-08 | FR-01/08, AC-02/08 | No wrong-conversation send after navigation/owner change; exact result-user-turn causality |
-| DP-09 | FR-09/11/13/14, AC-02–04/07 | §4.3 call/final **provisional** classification → `VALIDATING` or `FINAL_EVALUATING`, authoritative `TOOL_CALL` only with intent committed, S-A/S-B oracle PASS to `COMPLETE` |
+| DP-09 | FR-09/11/13/14, AC-02–04/07 | §4.3/§5.2 online `FINAL_SAFETY_CHECK → COMPLETE` on Q/A, and separate S-A/S-B formal PASS on frozen oracle |
 | DP-10 | FR-16/**FR-22**, AC-04/10/11 | Immutable built candidate only **after** Execution Gate, before scored trials |
 | DP-11 | NFR-01–17, AC-09/12 | No-network/read-only mock, synthetic trace, privileges/prompt injection audit |
 | DP-12 | FR-12, AC-10/11 | Versioned unit/fixture/integration/live evidence, manual recovery/quarantine trace, AC-level results |
@@ -440,7 +440,8 @@ Formal proof threshold inherited from Requirements: **S-A at least 10 live trial
 | DP-14 | FR-07/08/11/20/21, AC-06/08/12 | §5.8 **independent Q (actor quiescence) and A (result acceptance settlement)**, `ISSUED` alone blocks same-owner release, late acceptance and quarantine tests |
 | DP-15 | FR-03/04/15, AC-05/07 | §4.1 entire-message grammar, code example adversarial tests and Run context |
 | DP-16 | FR-05/06, AC-01/03/09 | Mock provider deterministic synthetic fixture provenance and actual call counts; **no network, credentials, filesystem or write effects** |
-| DP-17 | FR-03/04/09/11/13/14/15, AC-03/04/05/07/10 | §4.3 classifier precedence, call-shaped negatives, explicit refusal, final oracle and persisted single outcome; unit/fixture/MV3/live evidence with no extra provider/send |
+| DP-18 | FR-09/11/12/13/14/16/22, AC-03/04/10/11 | Separate `FormalTrialRecord`, human-rubric PENDING, grader restart/INDETERMINATE, no runtime owner mutation, no fixture-label-driven bridge tool control |
+| DP-17 | FR-03/04/09/11/13/14/15, AC-03/04/05/07/10 | §4.3 online four-way classifier, call-shaped negatives/refusal, persisted final snapshot, no fixture label/oracle lookup by Coordinator |
 
 **DP-01, DP-02, DP-04, DP-06 and DP-07 are priority falsification targets.** The actual effect boundary and browser evidence must be validated independently; this draft does not claim them PROVEN.
 
