@@ -119,9 +119,9 @@ Exact dependency versions, npm scripts, deterministic fixture checksums and loca
 
 **Files:** `src/contracts/{ids,messages,errors,run,outcome,tool}.ts`, `tests/unit/contracts.test.ts`.
 
-**Implement:** `parseRunRef()`, `parseDocumentKey()`, `validateBridgeMessageV1()`, `validateToolCallV1()`, typed `AssistantOutcome`, `RunTerminal`, `FormalTrialVerdict`, `ExecutionIntent` and `PublicationIntent`; distinct failed/unknown statuses and proof-bearing actor report types `ISSUED/NOT_ISSUED/OBSERVED_ACCEPTED`.
+**Implement:** `parseRunRef()`, `parseDocumentKey()`, `validateBridgeMessageV1()`, `validateToolCallV1()`, `validateRunBudgetV1()` (§1.2), typed `AssistantOutcome`, `RunTerminal`, `FormalTrialVerdict`, `ExecutionIntent`, `PublicationIntent`, `DispatchAttemptKey`, `EffectObligation`, and `EvidenceSealResult`; different typed namespaces for `RunTerminal`, `FormalTrialVerdict`, campaign scheduler/slot status and `DecisionGate`. Distinguish actual dispatch Entry from admission and `ISSUED` from `OBSERVED_ACCEPTED` and positive `NOT_ISSUED`.
 
-**RED:** missing version fields, unknown types, forged owner keys, unbounded string/depth and conflated `COMPLETE/PASS` compile/runtime tests fail. **GREEN:** exhaustive type guards with strict unknown-field rejection. **REFACTOR:** export discriminated unions and prove exhaustive switches. **Verify:** typecheck + `tests/unit/contracts.test.ts`. **Commit:** `feat: define Phase 0 authority and message contracts`.
+**RED:** missing version fields, unknown types, forged owner keys, unbounded string/depth, illegal `INCONCLUSIVE` Run/Trial value, under/overflow in RunBudgetV1, and conflated `COMPLETE/PASS` compile/runtime tests fail. **GREEN:** exhaustive type guards with strict unknown-field rejection. **REFACTOR:** export discriminated unions and prove exhaustive switches. **Verify:** typecheck + `tests/unit/contracts.test.ts`. **Commit:** `feat: define Phase 0 authority and message contracts`.
 
 ### Task 04 — Strict whole-turn parsing and callLike inventory
 
@@ -153,7 +153,7 @@ Exact dependency versions, npm scripts, deterministic fixture checksums and loca
 
 **Implement:** `prepareUserSentInitialPrompt()`, `deriveInitialPromptDigest()`, `armInitialInputExpectation()`, `recognizeManualFirstSend()`. I0–I5 sequence: owner acquired first; RunMarker and InitialInputCorrelationId preissued; exact tool grammar/catalog and user task journaled; unique composer prefilled; **human manually sends exactly once**, no extension auto-submit; observe exact user turn before accepting assistant. Subsequent manual interruption blocks run.
 
-**RED:** prompt sent before owner, mutated initial prompt, wrong conversation, duplicate initial send, missing user-turn acknowledgment. **GREEN:** exact prefill/observed correlation only; no tool entry before I4. **REFACTOR:** separate pure prompt serialization from UI. **Verify:** tests and synthetic browser. **Commit:** `feat: implement single user-sent launch handoff`.
+**RED:** prompt sent before owner, mutated initial prompt, wrong conversation, duplicate initial send, missing user-turn acknowledgment. **GREEN:** exact prefill/observed correlation only, and **initial canonical prompt ≤16384 UTF-8 bytes** (§1.2); no tool entry before I4. Timer starts at owner acquisition I1 even if manual initial Send is delayed. **REFACTOR:** separate pure prompt serialization from UI. **Verify:** tests and synthetic browser. **Commit:** `feat: implement single user-sent launch handoff`.
 
 ### Task 08 — Online classification and Run state machine (no oracle)
 
@@ -195,7 +195,7 @@ Exact dependency versions, npm scripts, deterministic fixture checksums and loca
 
 **Implement:** `encodeToolResultV1()`, `canonicalizeSendableComposer()`, `verifyComposerPayloadDigest()`. Bridge-minted PublicationId, evidence ID, RunMarker and preissued `next_input_correlation_id`; escape HTML, fake tool calls, Markdown fences, fake system roles, control characters and Unicode without changing numeric truth. Snapshot exact actual sendable editor state; do not equate superficial innerText with submitted payload.
 
-**RED:** malicious mock text injects executable call; composer has extra hidden text/attachment, user edit, alternative rich-editor serialization or oversized evidence. **GREEN:** immutable bounded canonical outgoing payload, exact digest-before-click or abort. **REFACTOR:** serializer version and golden digests. **Verify:** DOM fixture tests. **Commit:** `feat: bind quoted tool results to exact composer payload`.
+**RED:** malicious mock text injects executable call; composer has extra hidden text/attachment, user edit, alternative rich-editor serialization or oversized evidence. **GREEN:** complete outgoing payload ≤32768 UTF-8 bytes (both raw/canonical including escaped envelope), exact digest-before-click or abort; no partial content truncation or silent re-encoding. **REFACTOR:** serializer version and golden digests. **Verify:** DOM fixture tests. **Commit:** `feat: bind quoted tool results to exact composer payload`.
 
 ### Task 12 — Passive singleton UI effect actor, **NOT YET SEND-ENABLED** (RG-004-PLAN-001)
 
@@ -252,9 +252,9 @@ type EvidenceSealResult =
 
 **Files:** `src/evaluation/{manifest,oracle,grader,adjudication}.ts`, `tests/unit/{oracle,grader}.test.ts`, `tests/integration/grader-restart.test.ts`.
 
-**Implement:** `gradeSealedTrial()`, `recordHumanRubricJudgment()`, `compareAndSetFormalTrialVerdict()`. **Separate evaluation-only store** keyed by CampaignId/TrialId/ManifestSha, preregistered attempts, expected fixture label/next tool/ranges *only here*. Correctly grade S-A 2-call vs S-B 1-call, numeric/evidence accuracy and unsupported recommendations; optional frozen narrow human rubric yields `PENDING(HUMAN_REVIEW_REQUIRED)`; deadline without judgment ⇒ nonpassing trial `INDETERMINATE`. `PASS` only if operational Run safely `COMPLETE` and all oracle criteria pass. Duplicate grade callback/idempotent restart never alters Run/owner or causes a click.
+**Implement:** `gradeSealedTrial()`, `recordHumanRubricJudgment()`, `compareAndSetFormalTrialVerdict()`, `recordSealFailureWithoutRunMutation()`. **Separate evaluation-only store** keyed by CampaignId/TrialId/ManifestSha, preregistered attempts, expected fixture label/next tool/ranges *only here*. Correctly grade S-A 2-call vs S-B 1-call, numeric/evidence accuracy and unsupported recommendations; optional frozen narrow human rubric yields `PENDING(HUMAN_REVIEW_REQUIRED)`; deadline without judgment ⇒ nonpassing trial `INDETERMINATE`. `PASS` only if operational Run safely `COMPLETE` and all oracle criteria pass. Duplicate grade callback/idempotent restart never alters Run/owner or causes a click.
 
-**RED:** online `COMPLETE` with fabricated numbers being called PASS, S-A missing follow-up passing, S-B extra call passing, human pending being treated as PASS, grader writing to Run journal. **GREEN:** independent PASS/FAIL/INDETERMINATE, durable reason/rubric/reviewer. **REFACTOR:** strict runtime→evaluation import firewall and frozen rubric examples. **Verify:** grader tests + forbidden-import test. **Commit:** `feat: grade formal trials independently of runtime state`.
+**RED:** online `COMPLETE` with fabricated numbers being called PASS, S-A missing follow-up passing, S-B extra call passing, human pending being treated as PASS, grader writing to Run journal, typed `EVIDENCE_SEAL_INCOMPLETE` being mistaken for Run INDETERMINATE or Decision INCONCLUSIVE, and unstarted frozen slot silently omitted. **GREEN:** independent PASS/FAIL/INDETERMINATE, durable reason/rubric/reviewer; sealing failure leaves trial PENDING until deadline→nonpassing INDETERMINATE unless definite FAIL, while Run safe closure and Q/A remain unchanged. **REFACTOR:** strict runtime→evaluation import firewall and frozen rubric examples. **Verify:** grader tests + forbidden-import test. **Commit:** `feat: grade formal trials independently of runtime state`.
 
 ### Task 17 — **First integrated actual-click GREEN**, synthetic-browser race suite (RG-004-PLAN-001)
 
@@ -320,36 +320,36 @@ type EvidenceSealResult =
 | DP-02 Assistant completion and predecessor | 02,06,07,18 | Active→completed role/turn evidence, manual interruption negative |
 | DP-03 Strict parser | 03,04,17 | Whole-turn grammar tests, multiple/quoted calls rejected |
 | DP-04 Linearizable owner/epoch | 05,10,17,18 | IndexedDB transaction race, stale worker callback, one winner |
-| DP-05 Provider dispatch at-most-once | 09,10,17,18 | **Actual mock provider entries** and cancel interleavings |
-| DP-06 Publication at-most-once | 02,11,12,13,17,18 | **Actual single click**, singleton registry, composer digest, lost ACK |
-| DP-07 Cancel vs actual UI send | 10,12,14,17,18 | Both race orders, zero click/provider entry after ACK |
+| DP-05 Provider dispatch at-most-once | 05,09,10,14,17,18 | Durable admitted-may-enter obligation, actual mock entries, positive not-entered or UNKNOWN, cancel interleavings |
+| DP-06 Publication at-most-once | 02,11–14,17,18 | Tasks 12–14 **no-click** durable prerequisites; first authorized actual click only Task 17; Gemini first Task 18 |
+| DP-07 Cancel vs actual UI send | 05,10,12–14,17,18 | Durable obligation/Q/A before first click; both actual click/dispatch race orders, zero post-ACK effects |
 | DP-08 Safe result destination | 06,11,12,13,18 | Correct conversation/input binding even on navigation |
 | DP-09 S-A/B vs final boundary | 08,09,16,18,20 | Online Q/A COMPLETE separate from independent oracle PASS |
-| DP-10 Immutable evaluation | 19,20 | Post-implementation freeze approval and fixed attempts |
-| DP-11 Threat/least authority | 01,04,09,11,15,17 | No real provider/network/secret rights; adversarial corpus |
-| DP-12 Reproducible evidence | 01,15,17,18,20 | Trace hashes, exact commands, per-AC evidence categories |
+| DP-10 Immutable evaluation | 19,20 | Post-implementation freeze, distinct per-slot conversations, preregistered initial transcript fingerprints and safety-halt statuses |
+| DP-11 Threat/least authority | 01,03,04,08–11,15,17 | RunBudgetV1 numeric maximum values (§1.2), no network/secret rights, adversarial corpus |
+| DP-12 Reproducible evidence | 01,15–17,18–20 | Trace hashes, typed EvidenceSealFailure, no state `INCONCLUSIVE`, immutable slots and safety stop |
 | DP-13 User-sent initial Run handoff | 02,06,07,18 | Owner-first, exact prefill/input digest, first assistant causality |
 | DP-14 Q/A recovery and quarantine | 13,14,17,18 | ISSUED without acceptance blocks release; positive Q & A only |
 | DP-15 Grammar/example ambiguity | 04,08,17 | Embedded quote rejected, plain tool names never executed |
 | DP-16 Synthetic mock correctness | 09,10,15 | Deterministic fixtures and actual evidence IDs; no external IO |
 | DP-17 Online classifier | 03,04,08,17,18 | Four-way outcome; normal final without oracle; no implicit call |
-| DP-18 Independent formal grader | 15,16,19,20 | Separate TrialRecord store, human PENDING, frozen oracle/denominator |
+| DP-18 Independent formal grader | 15,16,19,20 | Separate TrialRecord store, sealing PENDING→INDETERMINATE on deadline, human rubric, fresh-chat isolation and immutable denominator |
 
 ## 4. Issue #1 AC-01–12 → planned evidence matrix
 
 | AC | Planned tasks | Required proof category |
 | --- | --- | --- |
 | AC-01 | 05,06,08,09,10,18 | Live current assistant request, one actual mock `cost.summary` entry |
-| AC-02 | 11–13,17,18 | One actual result UI click, correct accepted input, Gemini-chosen second call |
+| AC-02 | 11–14,17,18 | PublicationIntent + Q/A verified **before** first actual click in Task 17; real accepted result/next call in Task 18 |
 | AC-03 | 08,15,16,18,20 | Correct grounded final **formal** oracle PASS after live Run |
-| AC-04 | 18–20 | ≥10 each scenario, frozen prompts, exact denominators, ≥90% each |
+| AC-04 | 18–20 | ≥10 **actually started** each scenario, distinct verified clean chats, immutable trial slots/denominators, ≥90% each or safe HALT |
 | AC-05 | 04,06,08,17 | No partial/quoted/old/user/wrong-conversation/multi-call execution |
-| AC-06 | 05,10,12–14,17 | Owner race, execution/publication dedupe, restart and cancel sequencing |
+| AC-06 | 05,10,12–14,17 | Durable outstanding dispatch/send obligations, owner race, actual click/entry dedupe, restart and Cancel ACK ordering |
 | AC-07 | 03,04,08,17 | Unknown tool, schema, quota, ambiguity and DOM drift fail closed |
 | AC-08 | 06,10,12–14,17,18 | No wrong-chat publication; Cancel and failures/quarantine |
 | AC-09 | 01,09,11,15 | Mock-only, no network/credentials/write access |
 | AC-10 | 01–18 | Independent unit/DOM fixture/MV3/synthetic browser/**real Gemini** evidence |
-| AC-11 | 15,18–20 | Runtime/browser version, code/blob manifest hashes, trial logs, result reports |
+| AC-11 | 15,18–20 | Versioned evidence/error codes and sanitized final snapshots; verified trial histories, initial conversation fingerprints and safety-halt reports |
 | AC-12 | 01,04,11–15,17,20 | Threat model, prompt injection, provenance and recovery residual risks |
 
 ## 5. Scenario and negative-test fixtures to specify/freeze (not fixed now)
@@ -364,9 +364,9 @@ type EvidenceSealResult =
 
 Every candidate Spike Plan/Execution evidence report must contain **separate**: approval IDs and immutable HEAD/blob, task ID/commit, actual command/test exit codes, RED→GREEN evidence, actor/owner/document epochs, DOM contract version, *actual* mock provider entry/click counts vs intents, duplicate/worker/cancel schedules, Q/A reconciliation and quarantine results, threat/privacy review, model mode/browser versions, trial number/fixture hash, final answer snapshot **scoreable but synthetic-only**, independent grader PASS/FAIL with rubric reasons, and residual unproven assumptions.
 
-**Blocking conditions** (do not claim feasibility on unit tests): inability to identify active conversation and the expected assistant predecessor; no reliable completion marker; ambiguous composer or multiple send actors; UI `click()` not constituting a stable observable issuance boundary; wrong-chat send; any duplicated actual click/actual provider entry; any effect after acknowledged Cancel; old owner or result that may act after release; secret/data leak; real API invocation; missing company permission; inability to preserve scoreable sanitized final answer; grading coupled to Run or scenario-labelled bridge branching; unreliable hashes or untracked trials.
+**Blocking conditions** (do not claim feasibility on unit tests or durable intent counts): inability to identify active conversation and the expected assistant predecessor; no reliable completion marker; ambiguous composer or multiple send actors; UI `click()` not constituting a stable observable issuance boundary; wrong-chat send; any duplicated actual click/actual provider entry; any effect after acknowledged Cancel; old owner or result that may act after release; secret/data leak; real API invocation; missing company permission; RunBudgetV1 violation; unverified conversation history reuse across formal trials; inability to preserve scoreable sanitized final answer; grading coupled to Run or scenario-labelled bridge branching; unreliable hashes or untracked trials; any critical safety violation demands immediate durable `CAMPAIGN_HALTED_SAFETY` and no subsequent admission.
 
-**Plan Gate review must verify:** Tasks 01–20 cover DP-01–18 and AC-01–12, make all unproven B-01–B-11 falsifiable, specify implementation interfaces and failure codes without weakening Design, and preserve the explicit distinct permissions for Plan, Execution, post-implementation Freeze and Formal Decision. **Reviewing/approving this Plan is not authorizing Tasks 01–20.**
+**Plan Gate review must verify:** Tasks 01–20 cover DP-01–18 and AC-01–12, fix numerical RunBudgetV1 (§1.2) now, stage actual-send enablement only at Task 17, define dispatch admission/entry/UNKNOWN, isolate frozen formal conversations, classify seal errors and stop campaigns on safety breach; make unproven B-01–B-11 falsifiable, and preserve distinct Plan, Execution, post-implementation Freeze and Formal Decision gates. **Reviewing/approving this Plan is not authorizing Tasks 01–20.**
 
 ## 7. Current author self-review (documentation only)
 
@@ -375,6 +375,7 @@ Every candidate Spike Plan/Execution evidence report must contain **separate**: 
 - Whole-turn parser, online `COMPLETE` vs formal trial PASS, independent ExecutionIntent/PublicationIntent, Cancel/Q/A, one-click and owner fencing remain distinct.
 - Architecture-specific browser premise (exact DOM selectors, isolated-world singleton, click→acceptance behavior) is **unproven** and explicitly STOP-gated.
 - Test strategies are stated as future RED/GREEN/REFACTOR steps; no test results are claimed.
+- RG-004-PLAN-001–006 are **author-addressed only**: publication prerequisites, durable provider handoff, numeric NFR-02 budget, distinct trial conversation histories, typed sealing failure and durable safety halt; none is independently RESOLVED yet.
 - Independent Spike Plan Gate review is **required**. No source implementation, UI experimentation, evaluation freeze or Phase 1 work may begin on self-review alone.
 
 **Spike Plan Gate: NOT APPROVED. Execution Gate: NOT AUTHORIZED.**
