@@ -2,14 +2,14 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **DRAFT / DESIGN GATE NOT APPROVED** |
+| Status | **READY for Spike Plan authoring and Spike Plan Gate review only** (independently reported for Design blob `52c8f56d0700c3ad385c618fd19dd8ac0030ac19`) |
 | Issue | [#1](https://github.com/yohi/gemini-web-agent-bridge/issues/1) |
 | Requirements Gate | Independent review verdict **APPROVED** (as reported), [recorded on PR #2](https://github.com/yohi/gemini-web-agent-bridge/pull/2#issuecomment-6105978009). **Not** a native GitHub APPROVE event. |
 | Immutable Requirements HEAD | `fcdc3d7fcc6a53010fbfd3704dc3f5a4f50469c7` |
 | Immutable Requirements blob | `8025df805967f66787369a9cfa834c5dfc69d836` |
 | Stacking | Design branch derives from exact Requirements HEAD; PR #2 remains unchanged |
 | AI and budget | **Gemini Web only**, no Gemini API / other LLM / new paid AI service |
-| Authorized scope | Design and review only; no implementation, actual AWS/Bitbucket/MCP, or real UI automation |
+| Design Gate scope | Authoring and review of a separate docs-only Spike Plan based on the approved Design baseline; this gate did not authorize implementation, actual AWS/Bitbucket/MCP, or real UI automation |
 
 ## 1. Decision overview
 
@@ -483,18 +483,18 @@ If **B-01/B-02/B-03/B-07/B-08** cannot be justified with the approved UI/browser
 | RG-003-DES-003 | Major | §4.1: entire-turn grammar, exact normalization, ambiguous sample | B-05, DP-03/15 |
 | RG-003-DES-004 | Major | §3.1: one user-sent initial prompt, exclusive owner and first-turn linkage | B-07, DP-13 |
 | RG-003-DES-005 | Minor (**RESOLVED in latest independent review**) | §5.5/5.6/5.8 Q/A ownership and cancel settlement contract retained unchanged | B-09, DP-14 |
-| RG-003-DES-006 | Major (**PARTIALLY RESOLVED in latest review**) | §4.3/§5.2/§7 online `FINAL_ANSWER/COMPLETE` vs grader-owned PASS/FAIL, human PENDING, no fixture-label bridge branching | B-10/B-11, DP-09/17/18 |
+| RG-003-DES-006 | Major (**RESOLVED in latest independent review**) | §4.3/§5.2/§7 online `FINAL_ANSWER/COMPLETE` vs grader-owned PASS/FAIL, human PENDING, no fixture-label bridge branching | B-10/B-11, DP-09/17/18 |
 
-**Review history:** The latest independent review marked **DES-001–005 RESOLVED** and **DES-006 PARTIALLY RESOLVED**, with no new finding. This author addressed **only DES-006's online/offline responsibility gap**. Design Gate remains BLOCKED until fresh independent review; this revision is not an approval.
+**Review history:** The independent Fresh Design Review for HEAD `beb560759f0823af908ba1d7a41af8fd7b827352` and Design blob `52c8f56d0700c3ad385c618fd19dd8ac0030ac19` reported **DES-001–006 RESOLVED**, with **0 new Major/Minor findings**. The Gate Owner recorded **READY** for this exact immutable baseline on [PR #3](https://github.com/yohi/gemini-web-agent-bridge/pull/3#issuecomment-6107515824). This decision permits only authoring and review of a separate docs-only Spike Plan; it is not a browser feasibility proof, native GitHub APPROVE event, Spike Plan Gate approval, or implementation authorization.
 
 ## 10. Review gates and authorization limits
 
 1. **Requirements Gate**: The independent review **APPROVED** only HEAD `fcdc3d7...`, blob `8025df8...`, with all 8 findings resolved; approval recorded separately. Historical Requirements document remains unchanged.
-2. **Design Gate — NOW**: Independent review of this candidate against the immutable Requirements and Issue #1. Determine whether effect sequencing, authority and UI interaction contracts are internally coherent and falsifiable. **DRAFT until approved**.
-3. **Spike Plan Gate**: Review explicit RED/GREEN tasks, DOM browser probe tasks, fault schedules, synthetic fixture/oracle **specification**, frozen limits and formal freeze procedure. No existing implementation SHA required.
-4. **Execution Gate**: After approved plan and organizational authorization, explicitly permit **mock-only** code and **unscored** exploratory browser tests. No actual AWS/Bitbucket/MCP.
-5. **Formal Evaluation Baseline Freeze checkpoint**: Freeze *completed implementation* and all scorer inputs/trials in immutable Git assets, record approval **before** scored test #1.
-6. **Formal Evaluation / Decision Gate**: Execute pre-registered ≥10 trials per scenario and negative tests. Independently judge **PROVEN / BLOCKED / INCONCLUSIVE**; only PROVEN permits consideration of Phase 1.
+2. **Design Gate — READY**: The independent Fresh Design Review and Gate Owner decision apply only to HEAD `beb560759f0823af908ba1d7a41af8fd7b827352` / Design blob `52c8f56d0700c3ad385c618fd19dd8ac0030ac19`. The authorization is limited to authoring and review of a separate docs-only Spike Plan.
+3. **Spike Plan Gate — ACCEPTED/READY**: The Gate Owner recorded acceptance of the independent review for Plan HEAD `9965ad78a0ca1079b0f62d21d8927f038e81d2b2` / blob `85f833a576656a8ce699d3f59872f28ca933d6d7` on [PR #4](https://github.com/yohi/gemini-web-agent-bridge/pull/4#issuecomment-6107823544). This approves the Plan specification, not the later evaluation baseline freeze.
+4. **Execution Gate — LIMITED AUTHORIZATION**: Task 01 only is authorized by the Gate Owner on [PR #4](https://github.com/yohi/gemini-web-agent-bridge/pull/4#issuecomment-6107853005). Task 02 and later tasks, Gemini Web browsing/automation, actual AWS/Bitbucket/MCP, and formal trials are not authorized by that grant. Any further implementation requires separate explicit authorization.
+5. **Formal Evaluation Baseline Freeze checkpoint — NOT STARTED**: Freeze *completed implementation* and all scorer inputs/trials in immutable Git assets, record approval **before** scored test #1.
+6. **Formal Evaluation / Decision Gate — NOT STARTED**: Execute pre-registered ≥10 trials per scenario and negative tests. Independently judge **PROVEN / BLOCKED / INCONCLUSIVE**; only PROVEN permits consideration of Phase 1.
 
 ### Design Gate reviewer checklist
 
@@ -508,4 +508,4 @@ If **B-01/B-02/B-03/B-07/B-08** cannot be justified with the approved UI/browser
 - Do all AC-01–12 have credible test evidence and clear BLOCKED conditions?
 - Are permissions/policy and phase gates respected, with no implementation before approval?
 
-**Author self-review is not independent approval.** The Implementation/Spike Plan does **not** exist yet; its future writing-plans handoff must adopt the exact identities, error codes, event boundaries, failure categories and DP-01–18 evidence definitions in this Design, not invent substitutes. **No source files, extension code, AWS credentials or live Gemini automation are authorized or created by this document.**
+**Author self-review is not independent approval.** The Spike Plan exists as a separate artifact and its Gate has been accepted; its implementation handoff must adopt the exact identities, error codes, event boundaries, failure categories and DP-01–18 evidence definitions in this Design, not invent substitutes. The separate Execution Gate currently authorizes Task 01 only. **This Design document does not authorize source changes, extension behavior, AWS credentials or live Gemini automation.**
