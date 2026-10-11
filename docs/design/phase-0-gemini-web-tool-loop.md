@@ -169,7 +169,7 @@ Only an **actually executed** mock result can create this envelope. The bridge m
 
 ### 4.3 AssistantOutcome classifier and final-answer boundary (RG-003-DES-006)
 
-**One deterministic classification authority:** the MV3 coordinator classifies an *immutable snapshot* of exactly one new assistant turn after §3.3 proves its `ConversationKey`, `ExpectedInputTurnKey`, assistant role, generation-completion transition and matching `bodyDigest`. The content script may report structural observations, but neither the model nor the DOM adapter may decide final success. The coordinator alone runs a pure `classifyAssistantOutcome` function over the verified snapshot, durable run state, expected predecessor, journal evidence and **precommitted offline oracle** (the formal trial grader remains independently auditable).
+**One deterministic classification authority:** the MV3 coordinator classifies an *immutable snapshot* of exactly one new assistant turn after §3.3 proves its `ConversationKey`, `ExpectedInputTurnKey`, assistant role, generation-completion transition and matching `bodyDigest`. The content script may report structural observations, but neither the model nor the DOM adapter may decide final success. The coordinator executes a **deterministic outcome pipeline**: a pure **structural scan** over verified snapshot and expected input produces only a provisional call/final/refusal/invalid candidate; **separate** authorization and precommitted non-LLM oracle checks establish the final `AssistantOutcome` before any durable state transition. The structural scan has **no tool invocation, DB writes or UI effects**, and the independent formal trial grader can replay the evidence.
 
 ```ts
 type AssistantOutcome =
@@ -183,16 +183,16 @@ type AssistantOutcome =
 
 **Classification precedence is mandatory and non-inferential:**
 
-1. **Eligibility gate:** Require the unique attributable, fully completed assistant turn and fresh current owner/epoch/input/turn digest; check no cancel, mutation or competing input. Failure to establish this evidence ⇒ `INVALID_OUTPUT` with `TURN_UNATTRIBUTABLE` or `MODEL_NOT_COMPLETE`/state-specific error, **never** `FINAL_ANSWER`; do not assume a paused stream has ended. The run becomes `BLOCKED` (or `INDETERMINATE` if an outstanding effect is uncertain).
+1. **Eligibility gate:** Require the unique attributable, fully completed assistant turn and fresh current owner/epoch/input/turn digest; check no cancel, mutation or competing input. While a verified assistant is still actively generating, **remain `AWAITING_MODEL` without classifying or invoking any effect**. If the frozen timeout is reached, generation is stopped, a competing input appears, or evidence becomes ambiguous, fail closed as `INVALID_OUTPUT` with `TURN_UNATTRIBUTABLE` or `MODEL_NOT_COMPLETE`/state-specific error, **never** `FINAL_ANSWER`; do not assume a paused stream has ended. The run becomes `BLOCKED` (or `INDETERMINATE` if an outstanding effect is uncertain).
 2. **Call-shape inventory before final detection:** Inspect the **entire message DOM structure and bounded raw reconstructed body**, including nested blocks. Declare `callLike` if **any** (a) `gemini-agent-call` fence/language marker (even if malformed, nested or quoted), (b) JSON/object or code block containing the reserved discriminator `"kind":"tool_call"` with allowed JSON whitespace, or (c) code/JSON object containing **at least two** reserved protocol field names among `"call_id"`, `"tool"`, `"arguments"`, `"run_marker"`, `"responding_to"` in tool-request context. Matching ordinary **prose** references to `cost.summary`/`ec2.metrics` alone is **not** a call signature. Scanner failure, unknown renderer or incomplete structured body ⇒ `INVALID_OUTPUT`, not “zero candidates.” All patterns and bounds must be frozen in Spike Plan; do not use natural-language intention inference.
-3. **Call precedence:** If `callLike` is true, attempt §4.1 **whole-turn** grammar, expected marker/correlation, canonical JSON, strict schema, at-most-one candidate, allowlist/quotas and run policy. **Exactly one fully valid authorized call** ⇒ `TOOL_CALL` and reserve ExecutionIntent. Any zero/malformed/embedded/quoted call, multiple candidates (even identical), mismatch, unauthorized tool or schema failure ⇒ `INVALID_OUTPUT` and `BLOCKED` with no invocation. Do not fall through from a rejected call to final-answer evaluation.
+3. **Call precedence:** If `callLike` is true, attempt §4.1 **whole-turn** grammar, expected marker/correlation, canonical JSON, strict schema, at-most-one candidate, allowlist/quotas and run policy. Exactly one structurally valid call is a **provisional** `CALL_CANDIDATE` only. Enter `VALIDATING` to check exact run/input correlation, schema, allowlist/quotas, policy/cancel, current owner epoch and completed turn digest. **Only after all checks pass**, atomically persist the authoritative `TOOL_CALL` outcome and its **separate** ExecutionIntent; then enter guarded provider dispatch. Any zero/malformed/embedded/quoted call, multiple candidates (even identical), mismatch, unauthorized tool or schema failure ⇒ `INVALID_OUTPUT` and `BLOCKED` with no invocation. Do not fall through from a rejected call to final-answer evaluation.
 4. **Refusal precedence for non-call output:** If no call signature exists, recognize `MODEL_REFUSAL` **only** from a uniquely identified dedicated refusal/status UI state or one of the **pre-registered explicit refusal-only formats/patterns** in the frozen evaluation manifest, with matching assistant provenance. An ambiguous mixture of refusal-like text and purported analysis ⇒ `INVALID_OUTPUT`; never guess refusal intent through semantic inference. Refusal ⇒ terminal failure `BLOCKED`, counted as a failed trial.
 5. **Normal final candidate and oracle:** Only a no-`callLike`, non-refusal, substantive completed ordinary assistant answer with unique causal input can enter `FINAL_EVALUATING`. Before accepting `FINAL_ANSWER`, use the **precommitted non-LLM fixture oracle** on (i) actually executed mock calls/results, (ii) accepted user-visible result messages, (iii) final answer facts, and (iv) expected S-A/S-B path. Require all correct evidence IDs, resource identities, costs, units/windows, evidence-supported conclusion, **no material hallucination**, no missing/unneeded tool and no unsettled effect. Oracle failure/unknown ⇒ `INVALID_OUTPUT` with `FINAL_ORACLE_FAILED` / `FINAL_ORACLE_INDETERMINATE`; `BLOCKED`, not `COMPLETE`. The oracle may include an explicitly pre-frozen narrow human grading rubric, but there is **no runtime second LLM or Gemini self-grading**.
-6. **Immutable single disposition:** Atomically persist `AssistantOutcome` with run/turn/digest/oracle verdict before any next transition. Duplicate observation of the same turn yields the stored outcome; after `FINAL_ANSWER`, `INVALID_OUTPUT` or `MODEL_REFUSAL`, any late model output, regeneration or manual user input **cannot re-open the run**. No execution or publication may be initiated by a rejected or final turn.
+6. **Immutable single disposition:** Atomically persist the **final** `AssistantOutcome` with run/turn/digest/oracle verdict before entering an effect-bearing or terminal state. Provisional call/final candidates are not authoritative. A successful `TOOL_CALL` outcome and its distinct durable ExecutionIntent are committed in a transaction; rejected/refused/final turns create **no new** ExecutionIntent. Duplicate observation of the same turn yields the stored outcome; after `FINAL_ANSWER`, `INVALID_OUTPUT` or `MODEL_REFUSAL`, any late model output, regeneration or manual user input **cannot re-open the run**. No execution or publication may be initiated by a rejected or final turn.
 
 | Completed assistant body | `callLike` / structural result | Classification and disposition |
 | --- | --- | --- |
-| Exactly one full-turn canonical call, correct predecessor, schema and authorization | true, uniquely valid | `TOOL_CALL` → guarded ExecutionIntent/provider path |
+| Exactly one full-turn canonical call, correct predecessor, schema and authorization | true, uniquely valid | Provisional `CALL_CANDIDATE` → `VALIDATING` → committed `TOOL_CALL` + ExecutionIntent → guarded provider path |
 | Any embedded call example, malformed/partial call, multiple blocks, wrong token/tool | true but invalid | `INVALID_OUTPUT` → `BLOCKED`, **zero provider entries** |
 | Plain explanation of costs, including tool names as prose, with no protocol structures | false; not refusal | Run the oracle; only PASS ⇒ `FINAL_ANSWER` / completion eligible |
 | Explicit, uniquely recognized refusal | false; refusal evidence | `MODEL_REFUSAL` → terminal `BLOCKED` |
@@ -232,15 +232,18 @@ IDLE → ACQUIRING_OWNER → AWAIT_INITIAL_USER_SEND → AWAITING_MODEL
                                                         │
                                    ┌────────────────────┼─────────────────────┐
                                    ↓                    ↓                     ↓
-                               TOOL_CALL        FINAL_CANDIDATE       INVALID / REFUSAL
+                              CALL_CANDIDATE       FINAL_CANDIDATE       INVALID / REFUSAL
                                    ↓                    ↓                     ↓
                                VALIDATING        FINAL_EVALUATING          BLOCKED
                                    ↓                    │
-                               EXECUTING           oracle PASS?
-                                   ↓                 │       │
-                              RESULT_READY          YES     NO/UNKNOWN
-                                   ↓                 ↓       ↓
-                           PUBLISHING_RESULT       COMPLETE BLOCKED
+                       durable TOOL_CALL +         oracle PASS?
+                         ExecutionIntent          │       │
+                                   ↓              YES     NO/UNKNOWN
+                               EXECUTING           ↓       ↓
+                                   ↓             COMPLETE BLOCKED
+                              RESULT_READY
+                                   ↓
+                           PUBLISHING_RESULT
                                    ↓
                              AWAITING_MODEL
 
@@ -400,7 +403,7 @@ Formal proof threshold inherited from Requirements: **S-A at least 10 live trial
 | DP-06 | **FR-08/20/21**, AC-02/06 | §5.5 single doc effect actor, duplicate listeners, exact composer digest, **actual click count** and lost ACK |
 | DP-07 | FR-17/19/21, AC-06/08 | §5.6 Cancel ACK after positive actor quiescence / observed acceptance; race forcing at **actual click** |
 | DP-08 | FR-01/08, AC-02/08 | No wrong-conversation send after navigation/owner change; exact result-user-turn causality |
-| DP-09 | FR-09/11/13/14, AC-02–04/07 | §4.3 completed-turn outcome classification, S-A/S-B distinct `FINAL_EVALUATING → COMPLETE` paths, frozen oracle PASS and failure denominator |
+| DP-09 | FR-09/11/13/14, AC-02–04/07 | §4.3 call/final **provisional** classification → `VALIDATING` or `FINAL_EVALUATING`, authoritative `TOOL_CALL` only with intent committed, S-A/S-B oracle PASS to `COMPLETE` |
 | DP-10 | FR-16/**FR-22**, AC-04/10/11 | Immutable built candidate only **after** Execution Gate, before scored trials |
 | DP-11 | NFR-01–17, AC-09/12 | No-network/read-only mock, synthetic trace, privileges/prompt injection audit |
 | DP-12 | FR-12, AC-10/11 | Versioned unit/fixture/integration/live evidence, manual recovery/quarantine trace, AC-level results |
