@@ -61,8 +61,8 @@ If one of these is inherently unsupported, **Design Gate is BLOCKED**; the revie
 | Content Script | Observe a bound document; issue one verified permitted UI action | Cannot grant itself new permits, invoke arbitrary tool, approve its own result |
 | Service Worker coordinator | Authorize, serialize effects, decide run state | Cannot rely on RAM as durable state |
 | IndexedDB journal | Atomic ownership and one-time reservation candidate | Cannot transactionally atomize DOM clicks or Gemini delivery |
-| Mock provider | Deterministic synthetic read-only data | Cannot access network, secrets, filesystem or OS commands |
-| Offline oracle | Grade real logs against frozen synthetic answer constraints | Cannot rely on Gemini self-scoring or invented tool evidence |
+| Mock provider | Deterministic synthetic read-only data; same typed interface in S-A/S-B | Cannot access network, secrets, filesystem or OS commands; cannot choose model next tool using fixture label |
+| Formal Evaluation Grader | Read sealed Run evidence and frozen fixture/oracle; mechanical and optional human rubric scoring | Cannot mutate Run, owner, dispatch, publication, cancel or Gemini UI; cannot use Gemini self-scoring |
 
 All DOM content, model calls and mock-returned prose are untrusted, even if their format looks correct. The coordinator applies a schema and independently authorized run scope at every effect boundary.
 
@@ -230,46 +230,58 @@ type FormalTrialVerdict = "NOT_SCORED" | "PENDING" | "PASS" | "FAIL" | "INDETERM
 | `ConversationOwner` | conversationKey, runId, monotonic ownerEpoch, document binding, owner status, durable terminal/reconciliation marker |
 | `Run` | runId, ownerEpoch, **RunMarker, InitialPromptDigest, InitialInputCorrelationId, current InputCorrelationId → observed ExpectedInputTurnKey binding, launchStage**, allowed tools/budgets, model turn count, tool call count, FSM state, cancel status, active effect permits |
 | `TurnObservation` | runId, **InputTurnKey, AssistantTurnKey, predecessorInputTurnKey, role, transcriptOrder, observed active→completed evidence**, completed snapshot digest, document generation |
-| `AssistantOutcomeRecord` | runId, conversationKey, ownerEpoch, AssistantTurnKey, ExpectedInputTurnKey, immutable body digest, **TOOL_CALL / FINAL_ANSWER / INVALID_OUTPUT / MODEL_REFUSAL**, structural scan reason, schema/policy status, oracle verdict/reference, terminal failure code |
+| `AssistantOutcomeRecord` | runId, conversationKey, ownerEpoch, AssistantTurnKey, ExpectedInputTurnKey, immutable body digest, **TOOL_CALL / FINAL_ANSWER / INVALID_OUTPUT / MODEL_REFUSAL**, structural scan reason, schema/policy status, finalSnapshotDigest if final, terminal reason; **no fixture label/oracle verdict** |
 | `ExecutionIntent` | unique run+conversation+turn+call identity, args digest, ownerEpoch, `RESERVED/MAY_HAVE_DISPATCHED/FINISHED/UNKNOWN`, actual provider count |
 | `PublicationIntent` | **separate** stable identity derived from run+conversation+executed result+resultVersion, **exact canonical composer text/payload digest**, bound tab/frame/document/navigation generation, ownerEpoch, single-use nonce, **sender identity**, `RESERVED/PERMIT_OUTSTANDING/ISSUED/OBSERVED_ACCEPTED/UNKNOWN/ABORTED`, UI send issuance count |
 | `AuditEvent` | serial event order, bounded IDs, permission decision, intent status, cancellation/dispatch/send order, redacted failure reason |
+| `FormalTrialRecord` (evaluation-only) | CampaignId, TrialId, ManifestSha, frozen attempt slot, **grader-only fixture/oracle binding**, sealed Run trace digest, `NOT_SCORED/PENDING/PASS/FAIL/INDETERMINATE`, reason, optional `HUMAN_REVIEW_REQUIRED` + rubric version/reviewer/time; no effect rights |
 
-**Atomic coordination:** owner claim/release, cancellation status, dispatch permit and publication permit changes use a single authoritative transactional boundary around the conversation coordination record. Do not issue permission based on out-of-transaction stale snapshots. The service worker is the **sole writer and effect-grant authority**, all other extension contexts send messages through it.
+**Atomic coordination:** owner claim/release, cancellation status, dispatch permit and publication permit changes use a single authoritative transactional boundary around the conversation coordination record. Do not issue permission based on out-of-transaction stale snapshots. The service worker is the **sole writer and effect-grant authority for online Run/Intent/owner state**; the Grader separately owns FormalTrialRecord evaluation state and has **no effect-grant capability**. All other extension contexts send online messages through the coordinator.
 
 **Recovery:** On MV3 restart, reload journal before accepting messages. Never steal a conversation owner by lease timeout alone when an old effect could still arrive. Never retry a dispatch or send whose occurrence may be unknown. `UNKNOWN` blocks unsafe owner turnover until separate evidence-backed reconciliation.
 
-### 5.2 Run state machine
+### 5.2 Online Run and offline Formal Trial state machines (RG-003-DES-006)
 
 ```text
+RUN / Coordinator only (no scenario label, expected path or oracle)
 IDLE → ACQUIRING_OWNER → AWAIT_INITIAL_USER_SEND → AWAITING_MODEL
-                                                        ↓ completed, attributed turn
+                                                        ↓ completed attributable turn
                                                 CLASSIFYING_OUTCOME
-                                                        │
-                                   ┌────────────────────┼─────────────────────┐
-                                   ↓                    ↓                     ↓
-                              CALL_CANDIDATE       FINAL_CANDIDATE       INVALID / REFUSAL
-                                   ↓                    ↓                     ↓
-                               VALIDATING        FINAL_EVALUATING          BLOCKED
-                                   ↓                    │
-                       durable TOOL_CALL +         oracle PASS?
-                         ExecutionIntent          │       │
-                                   ↓              YES     NO/UNKNOWN
-                               EXECUTING           ↓       ↓
-                                   ↓             COMPLETE BLOCKED
-                              RESULT_READY
-                                   ↓
-                           PUBLISHING_RESULT
-                                   ↓
-                             AWAITING_MODEL
+                                          ┌─────────────┼───────────────┐
+                                          ↓             ↓               ↓
+                                    CALL_CANDIDATE FINAL_CANDIDATE INVALID/REFUSAL
+                                          ↓             ↓               ↓
+                                      VALIDATING  FINAL_SAFETY_CHECK  BLOCKED*
+                                          ↓             ↓
+                               durable TOOL_CALL  FINAL_ANSWER
+                               + ExecutionIntent        ↓
+                                          ↓        Q/A settlement?
+                                      EXECUTING       YES       NO
+                                          ↓            ↓         ↓
+                                     RESULT_READY   COMPLETE INDETERMINATE*
+                                          ↓
+                                   PUBLISHING_RESULT
+                                          ↓
+                                    AWAITING_MODEL
 
-On faults / unproven provenance / oracle failure → BLOCKED / INDETERMINATE
-On cancel request → CANCEL_PENDING → CANCELLED_ACK (only when §5.6 and §5.8 quiescence plus acceptance are proven)
+* If old effects are uncertain, remain INDETERMINATE/quarantined
+  rather than treating BLOCKED or COMPLETE as safe release.
+
+Cancel request → CANCEL_PENDING → CANCELLED_ACK
+                 only after §5.6 / §5.8 actor quiescence Q and acceptance A.
+
+FORMAL TRIAL / independent Grader only (no Run or effect authority)
+NOT_SCORED: exploratory pre-freeze Run, never in formal denominator
+PENDING: preregistered scored trial, including failed/aborted Runs
+   ├─ frozen oracle + mandatory human rubric approved → PASS
+   ├─ definite failed requirement                       → FAIL
+   └─ missing evidence/judgment after frozen deadline   → INDETERMINATE
 ```
 
-The state transitions are journaled with owner epoch, expected predecessor input and document generation. The **initial user prompt is sent once by the human**; all later tool-result sends require a bridge PublicationIntent. Every transition distinguishes intent reservation from **actual** effect issuance; a reserved operation can be lost without violating at-most-once.
+**Online:** §4.3 must classify the completed assistant before effect admission. `TOOL_CALL` and **separate** ExecutionIntent commit atomically after validation and before provider dispatch. `FINAL_ANSWER` is an observed, snapshotted *ordinary answer*, not correctness. `FINAL_SAFETY_CHECK` uses **only §5.8 Q/A, owner/cancel/document/turn evidence and unsettled effects**, not the oracle. Safe closure persists `COMPLETE` and fences ownership; unknown effects keep `INDETERMINATE`. A later trial verdict never changes a Run terminal status or authorizes further effects.
 
-**Terminal contract (§4.3 / RG-003-DES-006):** Every eligible completed assistant turn first enters `CLASSIFYING_OUTCOME`; `TOOL_CALL` proceeds to validation/dispatch, an ordinary final candidate enters `FINAL_EVALUATING`, and `INVALID_OUTPUT`/`MODEL_REFUSAL` enters `BLOCKED` (or `INDETERMINATE` for outstanding uncertain effects). **Only** oracle PASS plus the absence of unresolved dispatch/publication and verified §5.8 owner-settlement permits `FINAL_ANSWER → COMPLETE`. Persist outcome classification, oracle verdict and terminal reason once per AssistantTurnKey; no retry/re-classification after failure. `COMPLETE` is an authenticated **run success**, not a claim that the browser UI's model internals were correct or that a failed trial should be excluded.
+**Offline:** The frozen trial slot/manifest is registered **before** the scored run; a separate Grader reads the sealed runtime trace after stopping and commits the formal verdict. Human `PENDING` does not hold a safely completed Run/owner open. `FAIL` cannot reopen a Run, `PASS` cannot unlock quarantined ownership; absent evidence/human judgment at deadline becomes **nonpassing trial INDETERMINATE**. Requirements FR-14's final-answer oracle PASS applies **only to formal scoring**, distinct from operational `COMPLETE`.
+
 
 ### 5.3 Conversation owner
 
