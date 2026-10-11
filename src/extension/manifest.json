@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "Gemini Web Agent Bridge — Phase 0 (inactive)",
+  "version": "0.0.1",
+  "description": "Inert mock-only prototype. No runtime tool execution or Gemini automation.",
+  "permissions": [],
+  "host_permissions": [],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://gemini.google.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle",
+      "all_frames": false,
+      "world": "ISOLATED"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  }
+}
