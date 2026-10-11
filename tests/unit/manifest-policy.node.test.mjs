@@ -22,3 +22,12 @@ test('remote CSP script and unintended host permission are denied', () => {
 test('additional manifest capabilities are denied', () => {
   assert.throws(() => assertManifestLeastPrivilege(change(m => { m.externally_connectable = {}; })));
 });
+test('required name and version fields are enforced', () => {
+  assert.throws(() => assertManifestLeastPrivilege(change(m => { delete m.name; })));
+  assert.throws(() => assertManifestLeastPrivilege(change(m => { m.name = ''; })));
+  assert.throws(() => assertManifestLeastPrivilege(change(m => { m.name = 'x'.repeat(76); })));
+  assert.throws(() => assertManifestLeastPrivilege(change(m => { m.name = '😀'.repeat(38); })));
+  assert.throws(() => assertManifestLeastPrivilege(change(m => { delete m.version; })));
+  assert.throws(() => assertManifestLeastPrivilege(change(m => { m.version = '1.2.3.4.5'; })));
+  assert.throws(() => assertManifestLeastPrivilege(change(m => { m.version = '1.2.65536'; })));
+});

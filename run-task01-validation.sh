@@ -11,7 +11,6 @@ save_result() {
   printf 'EXIT_CODE=%s\n' "$code" >> "$status_file"
   echo "Result status: $code" | tee -a "$status_file"
   # Prefer Python's standard library: some CI/devcontainers have no zip binary.
-  # Exclude dependencies, symlinks, auth material, and git internals.
   if command -v python3 >/dev/null 2>&1; then
     printf 'RESULT_ZIP=/tmp/gemini-web-agent-bridge-task01-remediation-result.zip\n' >> "$status_file"
     python3 - <<'PYZIP' || printf 'RESULT_ZIP_CREATION_FAILED\n' >> "$status_file"
@@ -19,19 +18,29 @@ from pathlib import Path
 from zipfile import ZipFile, ZIP_DEFLATED
 root = Path.cwd()
 output = Path('/tmp/gemini-web-agent-bridge-task01-remediation-result.zip')
-excluded_dirs = {'node_modules', '.git', '.npm', '.cache', 'coverage'}
-excluded_names = {'.env', '.npmrc'}
+allowed_paths = [
+    'LICENSE', 'package.json', 'package-lock.json', 'run-task01-validation.sh',
+    'eslint.config.js', 'tsconfig.json', 'vitest.config.ts',
+    'docs/reports/phase-0-task-01-blocked.md',
+    'docs/reports/phase-0-task-01-verified.md',
+    'scripts/assert-node22.mjs', 'scripts/build-extension.mjs',
+    'scripts/manifest-policy.mjs',
+    'src/extension/background.ts', 'src/extension/content.ts',
+    'src/extension/manifest.json', 'src/extension/popup.html', 'src/extension/ui.ts',
+    'tests/unit/harness.test.ts', 'tests/unit/manifest-policy.node.test.mjs',
+    'task01-logs/STATUS.txt',
+    *[f'task01-logs/{name}.log' for name in (
+        'node-version', 'npm-version', 'node22-environment',
+        'red-security-fixtures', 'lockfile-generation', 'clean-npm-ci',
+        'typecheck', 'lint', 'vitest', 'build', 'manifest-negative-tests'
+    )],
+]
 with ZipFile(output, 'w', compression=ZIP_DEFLATED, compresslevel=9) as archive:
-    for path in sorted(root.rglob('*')):
+    for relative_name in allowed_paths:
+        path = root / relative_name
         if not path.is_file() or path.is_symlink():
             continue
         relative = path.relative_to(root)
-        if any(part in excluded_dirs for part in relative.parts):
-            continue
-        if path.name in excluded_names or path.name.startswith('.env.'):
-            continue
-        if path.suffix in {'.pem', '.key', '.p12'}:
-            continue
         archive.write(path, arcname=f'{root.name}/{relative.as_posix()}')
 print(f'Result ZIP: {output}')
 PYZIP
@@ -52,8 +61,9 @@ run node-version node --version
 run npm-version npm --version
 run node22-environment node scripts/assert-node22.mjs
 run red-security-fixtures node --test tests/unit/manifest-policy.node.test.mjs
-# Do not invent a lockfile; obtain registry metadata from the approved npm endpoint.
-run lockfile-generation npm install --package-lock-only --no-audit --no-fund
+if [[ ! -f package-lock.json ]]; then
+  run lockfile-generation npm install --package-lock-only --no-audit --no-fund
+fi
 run clean-npm-ci npm ci --no-audit --no-fund
 run typecheck npm run typecheck
 run lint npm run lint

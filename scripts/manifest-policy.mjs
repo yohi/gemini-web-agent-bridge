@@ -17,6 +17,13 @@ function strictKeys(value, keys, label) {
 export function assertManifestLeastPrivilege(manifest) {
   strictKeys(manifest, allowedKeys, 'manifest');
   if (manifest.manifest_version !== 3) throw new Error('MV3 only');
+  if (typeof manifest.name !== 'string' || manifest.name.length === 0 || manifest.name.length > 75) {
+    throw new Error('Manifest name must contain 1–75 characters');
+  }
+  if (typeof manifest.version !== 'string' || !/^\d+(?:\.\d+){0,3}$/u.test(manifest.version) ||
+      manifest.version.split('.').some(part => Number(part) > 65535)) {
+    throw new Error('Manifest version must contain 1–4 integers from 0 to 65535');
+  }
   if (!Array.isArray(manifest.permissions) || manifest.permissions.length !== 0) {
     throw new Error('Task 01 forbids extension permissions');
   }
