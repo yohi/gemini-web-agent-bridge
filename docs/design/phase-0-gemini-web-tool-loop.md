@@ -75,10 +75,10 @@ All DOM content, model calls and mock-returned prose are untrusted, even if thei
 | Step | Authoritative action and evidence | Reject if |
 | --- | --- | --- |
 | I0 | User opens a **stable, already identifiable Gemini conversation**, waits until idle, and types the investigation task **in the extension Run UI**; Gemini composer must be empty. | Unsaved/new chat, pending generation, ambiguous composer or conversation |
-| I1 | DOM adapter sends corroborated ConversationEvidence + browser-provided document identity. Coordinator **atomically acquires exclusive ConversationOwner**, stores RunId/OwnerEpoch, creates a fresh RunMarker (correlation only, not secret authorization). | Owner contention, unknown identity |
-| I2 | Coordinator constructs exactly **one canonical initial user prompt** from the user's task + RunMarker + allowed tool schemas + whole-turn output grammar + bounded scope. Journal `InitialPromptDigest`, run context and `AwaitInitialUserTurn` **before** any composer edit. Adapter fills the uniquely identified Gemini composer but does **not** click Send. | Composer content mismatch, ambiguous input control, navigation |
+| I1 | DOM adapter sends corroborated ConversationEvidence + browser-provided document identity. Coordinator **atomically acquires exclusive ConversationOwner**, stores RunId/OwnerEpoch, creates a fresh RunMarker and **InitialInputCorrelationId** before composing the prompt (correlation only, neither is secret authorization). | Owner contention, unknown identity |
+| I2 | Coordinator constructs exactly **one canonical initial user prompt** from the user's task + RunMarker + **InitialInputCorrelationId** (the future assistant response must echo it as `responding_to`) + allowed tool schemas + whole-turn output grammar + bounded scope. Journal `InitialPromptDigest`, run context and `AwaitInitialUserTurn` **before** any composer edit. Adapter fills the uniquely identified Gemini composer but does **not** click Send. | Composer content mismatch, ambiguous input control, navigation |
 | I3 | User reviews the prefilled content and **manually presses Gemini's Send once**. This is the **sole user submission** permitted during the active run; it is not a bridge Result Publication. | Modified input, duplicate send, unrelated manual input |
-| I4 | Observer identifies exactly one **new user-role transcript turn**, matching the canonical entire initial prompt digest, RunMarker and bound conversation/document. Journal `InputTurnKey` before arming `AWAITING_MODEL(InputTurnKey)`. | No exact user turn, digest mismatch, reordered or duplicated input |
+| I4 | Observer identifies exactly one **new user-role transcript turn**, matching the canonical entire initial prompt digest, RunMarker and bound conversation/document. Journal the observed `InputTurnKey` **bound to the already issued InitialInputCorrelationId** before arming `AWAITING_MODEL(InputTurnKey)`. A new correlation identifier is never generated retroactively after Gemini has received the prompt. | No exact user turn, digest mismatch, reordered or duplicated input |
 | I5 | Accept the **single new completed assistant turn** only if §3.3 proves unique causation from I4; then apply §4 whole-turn grammar. | A turn merely appearing “after Run start” is insufficient |
 
 Initial composer prefill is **not** bridge Send; a failed prefill cannot be treated as model prompt delivery. If a user edits/sends an alternate prompt, block the run; no guessing or silent retransmission. Users can cancel a not-yet-sent launch only after owner state is safely reconciled. Trial prompt and instructions are immutable formal-evaluation artifacts. If Gemini UI prefill/initial transcript matching cannot be reliably achieved, **B-07 BLOCKED**.
@@ -98,14 +98,14 @@ Initial composer prefill is **not** bridge Send; a failed prefill cannot be trea
 
 ### 3.3 AssistantTurnKey, completion, causality (RG-003-DES-002)
 
-`InputTurnEvidence={InputTurnKey,role:user,conversationKey,documentKey,canonicalDigest,runMarkerOrPublicationId,transcriptOrder}`.
+`InputTurnEvidence={InputTurnKey,inputCorrelationId,role:user,conversationKey,documentKey,canonicalDigest,runMarkerOrPublicationId,transcriptOrder}`.
 `AssistantTurnEvidence={AssistantTurnKey,role:assistant,conversationKey,documentKey,predecessorInputTurnKey,generationStartEvidence,completionTransitionEvidence,bodyDigest,transcriptOrder}`.
 
 A turn is executable only when **all** conditions are true:
 
 1. The verified Gemini message boundary identifies role **assistant**, distinct from user text, echoed tool-result text, quotes, old messages and code fragments. Styling/text alone is insufficient; unknown role → reject.
 2. The observer retains an **immediately-before-input transcript snapshot** and identifies **one newly created assistant response**, rather than using a recycled DOM node or timestamp guess. Redraw may update the observation only when identity/provenance remain uniquely established.
-3. Exactly **one outstanding ExpectedInputTurnKey** exists: I4's exact initial user turn or a **bridge result user turn visibly recorded in the same conversation** and matching the authorized PublicationIntent's payload digest / correlation marker. The assistant must be the **unique reply to that predecessor** according to verified transcript ordering and turn boundaries; “created after the Run” alone is not causality. No other input, regeneration, stop, competing assistant response or unknown message may intervene.
+3. Exactly **one outstanding ExpectedInputTurnKey**, **already bound to a bridge-minted InputCorrelationId that was included in the predecessor's visible text**, exists: I4's exact initial user turn or a **bridge result user turn visibly recorded in the same conversation** and matching the authorized PublicationIntent's payload digest / correlation marker. The assistant must be the **unique reply to that predecessor** according to verified transcript ordering and turn boundaries; “created after the Run” alone is not causality. No other input, regeneration, stop, competing assistant response or unknown message may intervene.
 4. An observed **active-generation → completed-generation UI transition**, paired with a stable snapshot and absence of competing stop/regenerate state, is required. A quiet timer, spinner disappearance alone, or closed JSON fence is **not** sufficient. The **actual observable Gemini completion transition remains unproven**; if no robust marker is found, **DP-02/B-02 BLOCKED**.
 5. The completed assistant root is unique; record its stable digest and immutable `AssistantTurnKey`. Before execution, re-check current document, owner and digest; changed nodes or ambiguous role imply rejection.
 6. **Any manual user submission after initial I3**, including an unrelated question between result send and model continuation, aborts attribution and **blocks** the run. Likewise user editing, regenerate, stop-generation, DOM reordering, another tab's input or navigation. No resumption by picking nearest output.
@@ -128,7 +128,7 @@ JsonObject := strict JSON object with exactly:
   version = 1
   kind = "tool_call"
   run_marker = current RunMarker
-  responding_to = current ExpectedInputTurn correlation
+  responding_to = bridge-issued InputCorrelationId that appeared in the observed predecessor input turn (NOT an InputTurnKey generated only after send)
   call_id = bounded nonempty ASCII ID
   tool = "cost.summary" | "ec2.metrics"
   arguments = typed tool-specific object
@@ -144,7 +144,7 @@ Example (not executable **here**; valid only as the *entire* assistant output in
 
 **Only permitted normalizations:** CRLF→LF, zero/one trailing code-block newline, standard JSON whitespace and unordered JSON object field order. No surrounding prose trimming, JSON repair, fence guessing, case folding, content rewording or implicit tool inference.
 
-**Validation order:** active user-authorized Run/owner → specific conversation and expected predecessor → fresh completed assistant evidence → full-body grammar + **0-or-1 candidate count** → `run_marker` and `responding_to` correlate to journal (not authorization by themselves) → strict JSON schema (reject duplicate keys, unknown keys, excessive size/depth, bad IDs or tool) → independent run policy/quota/cancel + final turn/owner fencing → durable ExecutionIntent → actual provider dispatch. A malformed or multi-call turn never executes a subset.
+**Validation order:** active user-authorized Run/owner → specific conversation and expected predecessor → fresh completed assistant evidence → full-body grammar + **0-or-1 candidate count** → `run_marker` and `responding_to` match the journaled RunMarker and **predecessor's preissued InputCorrelationId**, which must both have been visible to Gemini in that exact initial prompt or tool-result user message (not authorization by themselves) → strict JSON schema (reject duplicate keys, unknown keys, excessive size/depth, bad IDs or tool) → independent run policy/quota/cancel + final turn/owner fencing → durable ExecutionIntent → actual provider dispatch. A malformed or multi-call turn never executes a subset.
 
 **Irreducible ambiguity:** If Gemini emits a **whole-message, structurally identical block as a code example**, page output alone cannot establish the model's private intention. A valid call is considered only while the run is **explicitly awaiting a model-selected tool decision for the authorized investigation input**. If the user task asks to *explain the protocol*, or the causal context is ambiguous, no call executes. RunMarker is a correlation field, **not proof of semantic intent or authorization**. This residual limitation and adversarial example-only tests are mandatory review/proof items, not grounds to claim perfect intent recognition.
 
@@ -157,13 +157,15 @@ Example (not executable **here**; valid only as the *entire* assistant output in
   "kind":"tool_result",
   "origin_call_id":"step-1",
   "publication_id":"bridge-created-stable-id",
+  "run_marker":"RUN_MARKER_EXAMPLE",
+  "next_input_correlation_id":"BRIDGE_INPUT_CORRELATION_EXAMPLE",
   "status":"ok",
   "evidence_id":"synthetic-evidence-001",
   "data":{"example":"bounded synthetic payload"}
 }
 ```
 
-Only an **actually executed** mock result can create this envelope. The bridge must also journal its originating `run_marker`, expected result-user-turn correlation and exact outgoing payload digest; the result text does not grant permission. The bridge quotes/escapes embedded instructions, call-shaped JSON, markup and fake roles as **data**, and never parses its own result message as a model-origin call. This is an ordinary Gemini UI message, **not** the native tool role. If the model ignores it, mark the trial failed; do not fabricate success. Oversized data fails rather than being silently truncated.
+Only an **actually executed** mock result can create this envelope. The bridge must create **a fresh InputCorrelationId before preparing the result text**, include it in the visible result envelope as `next_input_correlation_id`, then journal this ID, originating `run_marker` and exact outgoing payload digest **before UI send**; the result text does not grant permission. The bridge quotes/escapes embedded instructions, call-shaped JSON, markup and fake roles as **data**, and never parses its own result message as a model-origin call. This is an ordinary Gemini UI message, **not** the native tool role. If the model ignores it, mark the trial failed; do not fabricate success. Oversized data fails rather than being silently truncated.
 
 ## 5. Durable state and exclusivity design
 
@@ -172,7 +174,7 @@ Only an **actually executed** mock result can create this envelope. The bridge m
 | Record | Required fields |
 | --- | --- |
 | `ConversationOwner` | conversationKey, runId, monotonic ownerEpoch, document binding, owner status, durable terminal/reconciliation marker |
-| `Run` | runId, ownerEpoch, **RunMarker, InitialPromptDigest, launchStage, ExpectedInputTurnKey**, allowed tools/budgets, model turn count, tool call count, FSM state, cancel status, active effect permits |
+| `Run` | runId, ownerEpoch, **RunMarker, InitialPromptDigest, InitialInputCorrelationId, current InputCorrelationId → observed ExpectedInputTurnKey binding, launchStage**, allowed tools/budgets, model turn count, tool call count, FSM state, cancel status, active effect permits |
 | `TurnObservation` | runId, **InputTurnKey, AssistantTurnKey, predecessorInputTurnKey, role, transcriptOrder, observed active→completed evidence**, completed snapshot digest, document generation |
 | `ExecutionIntent` | unique run+conversation+turn+call identity, args digest, ownerEpoch, `RESERVED/MAY_HAVE_DISPATCHED/FINISHED/UNKNOWN`, actual provider count |
 | `PublicationIntent` | **separate** stable identity derived from run+conversation+executed result+resultVersion, **exact canonical composer text/payload digest**, bound tab/frame/document/navigation generation, ownerEpoch, single-use nonce, **sender identity**, `RESERVED/PERMIT_OUTSTANDING/ISSUED/OBSERVED_ACCEPTED/UNKNOWN/ABORTED`, UI send issuance count |
@@ -243,7 +245,7 @@ This is a **specific proposed mechanism**, not an established Chrome guarantee. 
 2. Before informing the content script, atomically persist `PERMIT_OUTSTANDING`, bound `DocumentKey`, single-use nonce, actor identity, payload digest and an **outstanding effect obligation**. This is a **may-have-issued** recovery state, not proof of a send.
 3. The elected content actor verifies exact composer content, consumes the nonce and issues **at most one** synchronous send-control `click()`. Record separate audit events for `PUBLICATION_CLAIMED`, `PERMIT_OUTSTANDING`, `UI_SEND_ISSUED`, and any `OBSERVED_ACCEPTED` message.
 4. **`ISSUED`** means the actor invoked `click()` once; it is **not proof** Gemini accepted/submitted the message. **`NOT_ISSUED`** means a positive actor report proves it exited *before* the click, no other actor exists and no old permit can fire later. A dead worker, vanished document or missing ACK is **not `NOT_ISSUED`**.
-5. **`OBSERVED_ACCEPTED`** means exactly one **new user-role transcript turn**, in the original verified conversation, matches the full canonical outgoing result text and publication correlation ID. That establishes browser-visible acceptance, **not server acknowledgment**; only this turn can become the next `ExpectedInputTurnKey` (§3.3).
+5. **`OBSERVED_ACCEPTED`** means exactly one **new user-role transcript turn**, in the original verified conversation, matches the full canonical outgoing result text and publication correlation ID. That establishes browser-visible acceptance, **not server acknowledgment**; only this turn can become the next `ExpectedInputTurnKey` **associated with the already visible `next_input_correlation_id`**, so the next Gemini tool call can truthfully echo `responding_to` (§3.3).
 6. If the actor crashes between claim and click, or between click and ACK, or transcript acceptance is absent/ambiguous, mark `UNKNOWN/INDETERMINATE` and **do not** retry. Never equate reservation, `ISSUED`, `OBSERVED_ACCEPTED` and remote Gemini delivery.
 7. A second publication action is prohibited **even if Gemini ignored the first**. This is at-most-once initiation, not delivery liveness.
 
