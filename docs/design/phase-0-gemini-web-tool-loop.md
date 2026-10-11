@@ -215,55 +215,97 @@ The state transitions are journaled with owner epoch, expected predecessor input
 
 **Unproven:** Durable storage commit and the in-process provider entry cannot be one database transaction. This conservative protocol may lose invocations but must not duplicate them. Cancellation acknowledgment may wait on unresolved dispatch.
 
-### 5.5 Result Publication Intent / UI send
+### 5.5 Result Publication Intent — actual UI issuance (RG-003-DES-001)
 
-**FR-20/FR-21** require an identity/claim independent of execution. A completed tool result maps to a unique publication key **including run + conversation + actual execution + result version**; fixture `evidence_id` alone is insufficient since it can recur across trials.
+`FR-20` and `FR-21` require a **distinct durable publication identity/claim** from ExecutionIntent: `run + conversation + actually executed call + resultVersion` with immutable serialized payload digest. An `evidence_id` alone is not unique.
 
-Proposed at-most-once issuance protocol:
+#### 5.5.1 Definition of actual UI send initiation and payload
 
-1. Commit a unique `PublicationIntent` with exact payload digest, evidence provenance and owner epoch in durable journal. Concurrency results in one winner; conflicting payload for the same identity is rejected.
-2. Just before UI action, validate current conversation, run, cancel and fenced epoch. Consume **one single-use UI issuance permit** and persist `PERMIT_OUTSTANDING` **before** notifying the exact bound tab/frame/document.
-3. The content script accepts only that permit/document; it synchronously marks the nonce spent locally and initiates **at most one** DOM send action without an `await` between its last local document check and action. It reports `ISSUED` or provable `NOT_ISSUED`.
-4. If the worker/page dies or send acknowledgment is missing, treat the durable permit as **possibly used**; set `UNKNOWN/INDETERMINATE`. Never generate another permit or automatically resend that result.
-5. A duplicated permit message, repeated result-ready callback or second publisher must be rejected by the coordinator and document-local nonce deduplication.
-6. Sender completion and permit retirement are persisted. A second conversation run cannot take over if a stale outstanding send could still initiate.
+**`UI_SEND_ISSUED` is the single synchronous invocation of `HTMLElement.click()` on Gemini's unique, enabled, composer-associated Send control, by one authorized content-script actor, with the entire exact journaled tool-result text already present and verified in that same composer.** This is the **extension's actual UI send initiation**, not reservation, permission delivery, success in the Gemini backend, or exactly-once delivery.
 
-**Non-atomic gap:** IndexedDB transactions cannot include the DOM click. Consequently **exactly-once Gemini delivery is not promised**; issuance may be lost. It remains a major open proof obligation whether Chrome can establish **actual send initiation and cancel ordering**. If the real UI send action is asynchronous in a way that permits post-acknowledgment issuance, **Design or Spike must BLOCK**, not weaken FR-21.
+The Gemini DOM contract must identify one active composer and one corresponding enabled Send control in the **bound tab/frame/document/conversation**. It rejects hidden/duplicate composers, ambiguous roles, attachments, pending user edits, obsolete controls, or unverified rich-editor behavior. The coordinator journals exact canonical outgoing plain text and `payloadDigest`; the content script must read the **actual sendable editor value**, canonicalize with the identical serializer and match the digest **just before click**. A superficially matching `innerText` alone is insufficient. If the actual rich composer serialization cannot be verified, **B-01/DP-06 BLOCKED**.
 
-### 5.6 Cancellation linearization
+Phase 0 permits **only that single click path**, never guessed Enter-key fallbacks, repeated clicks, submit alternatives, or private HTTP calls. `HTMLElement.click()` may be rejected by Gemini or enqueue app-level processing; whether it works is **not proven** and must be measured in real Chrome.
 
-- Clicking Cancel produces `CANCEL_PENDING` immediately, but it is **not an acknowledgment**.
-- The authoritative cancel transition closes new dispatch and new UI issuance permit gates. It must wait for all previously granted effects that **might still initiate** a provider call or DOM send; only when these are resolved/terminated can it persist `CANCELLED_ACK` and tell the user cancellation is confirmed.
-- If the cancel barrier wins the serialized effect gate, actual provider invocation/send count afterward must be **zero**. If an effect already committed, do not pretend it was rolled back.
-- Lost sender/worker acknowledgment cannot be interpreted as quiescence. Keep `CANCEL_PENDING` and show `INDETERMINATE` if a permit cannot be accounted for. No falsely confirmed cancel; no premature owner release.
-- Actual UI event issuance must be ordered with the cancel acknowledgment. A **pre-send check by the worker alone is insufficient** if a content script can issue the action later; any viable protocol must prove outstanding permit retirement.
+#### 5.5.2 Single executor and duplicate message delivery
 
-This may compromise cancellation liveness; that is preferable to a false safety guarantee. A human can inspect the blocked run, but **manual reset may not silently authorize a fresh conflicting run**.
+- A **single elected UI-effect executor** must be registered per `DocumentKey=(tabId,frameId,documentId,navigationGeneration)`, in the extension's isolated world. Its document-global synchronous singleton registry is acquired **before attaching an effect-message listener**. Reinjection/duplicate initialization must detect the existing executor and **must not register another effect listener**. Passive DOM observers never consume send permits.
+- `tabs.sendMessage` targeting `documentId` and frame narrows delivery but **does not guarantee a single listener**. The design does **not** infer at-most-once from API routing. Both a verified sole executor and a shared doc-global spent-nonce registry are required; fail closed if isolated-world sharing, executor uniqueness or sender document identity cannot be proven.
+- The coordinator grants **one** single-use, document/epoch-bound issuance permit. It never grants a second for the same PublicationIntent. The elected actor synchronously consumes its nonce in a doc-global set and enters a `sendInProgress` critical section. Duplicated delivery (including forced duplicate handlers) must observe the nonce as spent and must not click.
+- The final live-document/conversation/owner/nonce/composer-digest checks, marking nonce spent and invoking `click()` run **in one synchronous JS run-to-completion section with no `await`, timer or queued callback between them**. All content-script issuer paths must use this gate; no other script can independently click under the same permit.
+- MV3 worker restart does not mint a replacement nonce or make an outstanding permit reusable. Lost delivery/ACK or duplicate listeners that cannot be ruled out leave `INDETERMINATE`; no resend.
 
-### 5.7 Mandatory race schedules
+This is a **specific proposed mechanism**, not an established Chrome guarantee. Controlled browser tests must inject duplicate listeners, reinjection, target frame/document mismatches and worker restart. Any observable second `click()`, ambiguous singleton or inability to prove a single executor is **Design/Spike BLOCKED**.
 
-Test controlled interleavings:
-- Same conversation / two tabs both acquire; MV3 restart during acquisition; stale old owner tries dispatch/send.
-- Cancel before/after validation, before/after dispatch gate, before/after provider entry, then delayed result.
-- Cancel before/after UI permit issuance, before/after actual DOM send action, missing acknowledgment.
-- Two concurrent publishers for same result; duplicate event/callback; two identical permits; lost result-ready notification.
-- Worker crash **after DOM issuance but before acknowledgment**; browser navigation while permit is outstanding; attempted owner replacement.
-- Each event log must distinguish **intent/permit** from **actual provider call / actual UI send issuance**. Simply counting journal writes is not proof of at-most-once effects.
+#### 5.5.3 Publication / report contract
+
+1. The coordinator verifies actual provider result, unique publication key/payload digest, run authorization, current owner epoch and expected conversation; it atomically claims `PublicationIntent`. A parallel/duplicate claimant loses; inconsistent payloads fail closed.
+2. Before informing the content script, atomically persist `PERMIT_OUTSTANDING`, bound `DocumentKey`, single-use nonce, actor identity, payload digest and an **outstanding effect obligation**. This is a **may-have-issued** recovery state, not proof of a send.
+3. The elected content actor verifies exact composer content, consumes the nonce and issues **at most one** synchronous send-control `click()`. Record separate audit events for `PUBLICATION_CLAIMED`, `PERMIT_OUTSTANDING`, `UI_SEND_ISSUED`, and any `OBSERVED_ACCEPTED` message.
+4. **`ISSUED`** means the actor invoked `click()` once; it is **not proof** Gemini accepted/submitted the message. **`NOT_ISSUED`** means a positive actor report proves it exited *before* the click, no other actor exists and no old permit can fire later. A dead worker, vanished document or missing ACK is **not `NOT_ISSUED`**.
+5. **`OBSERVED_ACCEPTED`** means exactly one **new user-role transcript turn**, in the original verified conversation, matches the full canonical outgoing result text and publication correlation ID. That establishes browser-visible acceptance, **not server acknowledgment**; only this turn can become the next `ExpectedInputTurnKey` (§3.3).
+6. If the actor crashes between claim and click, or between click and ACK, or transcript acceptance is absent/ambiguous, mark `UNKNOWN/INDETERMINATE` and **do not** retry. Never equate reservation, `ISSUED`, `OBSERVED_ACCEPTED` and remote Gemini delivery.
+7. A second publication action is prohibited **even if Gemini ignored the first**. This is at-most-once initiation, not delivery liveness.
+
+**Non-atomic gap:** IndexedDB cannot transactionally include a DOM click. All reservations are conservatively irrevocable. If the real page launches unexpected delayed extension-side send work or the actual send/acceptance cannot be observed reliably, the design fails closed and **B-01 remains BLOCKED**.
+
+### 5.6 Cancel ACK versus actual effect start (RG-003-DES-001)
+
+Distinguish `CANCEL_REQUESTED` (user input), `CANCEL_GATE_CLOSED` (durable transaction refuses any **new provider dispatch/publication permits**) and `CANCELLED_ACK` (confirmed cancellation after **all previous effect issuers** are positively quiescent).
+
+1. Cancel request is serialized with **provider dispatch** and **publication permit admission** in the coordinator's durable transaction. Closing admission is **not by itself** proof the UI action cannot start: a previous permit may already be in transit to a content script.
+2. **Do not commit `CANCELLED_ACK` while any prior permit might still start a click**. Require positive evidence that the one actor either (a) exited before clicking and is permanently unable to do so (`NOT_ISSUED`) or (b) already completed the single click critical section, can never execute it again, **and** a matching result user turn has been **`OBSERVED_ACCEPTED`**. If acceptance is pending, do not ACK based on `ISSUED` alone.
+3. No post-check asynchronous `click()` callbacks exist under the protocol. All actual extension-initiated UI send actions occur in a single synchronous actor critical section; actor retirement evidence precedes the final persisted `CANCELLED_ACK` transaction.
+4. If an actor, document or UI application-side submission can execute a *new* send after a purported ACK, **the prerequisites are not established**, so do not ACK and mark `CANCEL_PENDING/INDETERMINATE`. No timeout, missing message response or MV3 worker restart proves quiescence.
+5. An earlier click/user turn cannot be rolled back. The UI must never represent already initiated sends as canceled. An uncertain UI result may remain blocked permanently.
+
+**Conditional happens-before argument:** At the ACK commit, both new effect gates are closed; every previously permitted actor is proven terminated or has positively finished its only synchronous send action; all nonces are spent, and no future extension click callbacks exist. Therefore no **new bridge UI click** can begin after ACK **if** the singleton executor, sync-send and observed-settlement browser premises are true. A Gemini internal asynchronous network send is **outside the extension's atomicity**, and page-level acceptance/delivery is not guaranteed. Those premises must be directly falsified by controlled and real-browser tests; if unprovable **DP-06/DP-07 BLOCKED**. Do not silently rename a durable permit reservation into "actual send".
+
+### 5.7 Mandatory controlled interleavings
+
+Record **actual mock provider entry counts and actual DOM send-control `click()` counts separately** from journal claims.
+
+- Two tabs same conversation / atomic owner competition, stale epoch callbacks and MV3 worker restarts; duplicate result notifications and parallel publisher transactions.
+- Same-document duplicate content script injection/listener, duplicated identical `documentId` messages, two frames, navigation and rerender; ensure **one elected actor and one actual click at most**.
+- Cancel before/after validation, execution reservation, **actual provider dispatch**, publication claim, permit grant, actor receiving it, **actual click**, observed accepted user turn and worker ACK loss. Force both orders.
+- Composer changed by user after preparation and before click, two composers, changed serialization, missing button or wrong bound conversation ⇒ **zero clicks**, not a best-guess send.
+- Worker stops after permit delivery but before click; after click but before `ISSUED` ACK; after observed user turn but before journal commit; old sender after attempted new owner ⇒ no resend and no falsely confirmed Cancel ACK.
+- Manual unrelated user input while `ExpectedInputTurnKey` pending, stop/regenerate or altered previous message ⇒ reject subsequent assistant call.
+- All logs include owner/document/actor identity, publication/nonce, composer digest, click issuance, optional accepted-user-turn identity, cancel gate close/ACK and uncertainty code.
+
+### 5.8 Manual recovery and quarantine (RG-003-DES-005)
+
+**No generic Reset/Retry.** An uncertain ExecutionIntent or PublicationIntent remains durably bound to the old Run/ConversationKey/OwnerEpoch; it may **never** be replayed automatically.
+
+| State | Permitted resolution | Prohibited |
+| --- | --- | --- |
+| Pre-effect BLOCKED with affirmative proof **no actor can still initiate** a send/dispatch | Cancel and atomically close/release the owner after positive quiescence evidence | Assuming an unobserved initial prompt was sent |
+| `INDETERMINATE` with unknown invocation/publication | Manual inspection of sanitized trace; **quarantine the conversation** and seek independent proof of actor termination/effect status | Resend/reinvoke, clear journal, timeout-based takeover, declaring `NOT_ISSUED` from absent acknowledgment |
+| Proof of an earlier `ISSUED` or `NOT_ISSUED` event plus no possible pending issuer | Explicit operator confirmation and durable fenced terminal reconciliation; **no old effect retry** | Reusing an old ExecutionIntent/PublicationIntent for a second attempt |
+| Permanently unreconcilable old conversation | Keep **that conversation permanently blocked for automation**; Gemini manual use is allowed. A **distinct new verified conversation** may be used for a fresh run **only when all old send-capable actors/documents are positively quiescent and no installation-wide uncertainty remains** | Silent same-conversation replacement, unlocking by browser tab closure alone, restarting the extension as proof of no send |
+
+Positive proof requires: exact old actor/document fate (no remaining runnable callbacks), owner-epoch fencing, a corroborated current transcript or conclusively destroyed document, and audit-confirmed effect ordering. A user closing a tab or pressing Reset alone cannot establish whether a result reached Gemini. If positive proof is unavailable, **safety wins over liveness**: no same-conversation recovery, potentially indefinite BLOCKED. No special manual override exists in Phase 0.
+
+**Typed failure codes for writing-plans:** `CONVERSATION_UNBOUND`, `INITIAL_PROMPT_MISMATCH`, `TURN_UNATTRIBUTABLE`, `ROLE_AMBIGUOUS`, `MODEL_NOT_COMPLETE`, `CALL_GRAMMAR_INVALID`, `MULTIPLE_CALL_CANDIDATES`, `SENDER_NOT_SINGLETON`, `COMPOSER_DIGEST_MISMATCH`, `PUBLICATION_UNKNOWN`, `OWNER_EPOCH_STALE`, `CANCEL_EFFECT_UNSETTLED`, `RECOVERY_QUARANTINED`. Preserve distinct `PERMIT_OUTSTANDING`, `UI_SEND_ISSUED`, and `OBSERVED_ACCEPTED`.
+
 
 ## 6. UI-safety and failure taxonomy
 
 | Failure / threat | Behavior |
 | --- | --- |
-| Completion marker absent, streaming stalled, role ambiguous | `BLOCKED`; no candidate executed |
+| Completion marker absent, streaming stalled, role ambiguous or missing predecessor input | `BLOCKED`; no candidate executed |
 | Two valid call envelopes, even identical | Reject all; no batch |
 | Unknown tool/invalid argument/budget exceeded | Deny and stop; no provider entry |
 | Tool result contains instructions / fake system role | Encoded as data; never grant authority |
 | Conversation changed/unknown during execution or publication | No new effect; `BLOCKED` or `INDETERMINATE` |
 | Duplicate execution event or provider outcome unknown | At-most-once; no provider retry |
-| Duplicate publisher or UI send acknowledgment lost | At-most-once; no UI resend |
-| Cancel requested while effect permit outstanding | Cancel **pending**, not falsely acknowledged |
+| Duplicate publisher / effect listener or lost UI acknowledgment | Singleton/nonce gate: actual click at most once; `INDETERMINATE` without resend |
+| Cancel while send permit outstanding | Cancel remains **pending** until positive actor quiescence plus browser-visible result acceptance (or definitive `NOT_ISSUED`) |
 | Old owner epoch or another tab | Deny dispatch/send |
 | Gemini refuses tool grammar, wrong next tool, fabricated final data | Count failed scored attempt |
+| Additional manual user input, initial prompt mismatch or regeneration | Invalidate predecessor binding; `BLOCKED` |
+| Composer digest mismatch / unverified singleton sender | No click; `BLOCKED` |
+| Permanently uncertain result publication | Quarantine old conversation; no manual retry or unsafe release |
 | Extension permission/policy uncertain | No live browser run |
 
 Chrome extension uses least permissions and bundled scripts, no dynamic JS evaluation, no credential capture or external network for mocks. Logs store synthetic evidence identifiers/hashes and state transitions, not raw chat, personal data or company invoices.
@@ -287,18 +329,22 @@ Formal proof threshold inherited from Requirements: **S-A at least 10 live trial
 
 | ID | Coverage | Evidence required / fail condition |
 | --- | --- | --- |
-| DP-01 | FR-01/18, AC-05/08 | Demonstrate stable same-conversation identity across tabs/navigation; ambiguous ⇒ BLOCKED |
-| DP-02 | FR-02/03, AC-01/05 | Live completed-assistant origin marker and partial/quoted/old-turn negatives; no reliable completion ⇒ BLOCKED |
-| DP-03 | FR-04/05/15, AC-05/07 | Strict grammar/schema/unknown-tool, double-call, data injection fixture/unit tests |
+| DP-01 | FR-01/18, AC-05/08 | §3.2 conversation-specific route **plus independent visible corroboration**, same chat/two tabs and different chat/same title; ambiguous ⇒ BLOCKED |
+| DP-02 | FR-02/03, AC-01/05 | §3.3 active→completed assistant transition, role, **unique predecessor input**, manual interruption negatives |
+| DP-03 | FR-03–05/15, AC-05/07 | §4.1 strict **whole-assistant-turn** tagged code-block grammar; quotes/examples and multiple calls rejected |
 | DP-04 | FR-01/18, AC-06 | Atomic ownership/cancel epoch and MV3 restart fault injection; no dual owners |
 | DP-05 | FR-07/17/19, AC-01/06 | Actual mock provider entry count ≤1; crash and cancellation schedules |
-| DP-06 | **FR-08/20/21**, AC-02/06 | At-most-once **actual UI send issuance** per result across parallel publishers, duplicate message, worker crash |
-| DP-07 | FR-17/19/21, AC-06/08 | Actual UI send and provider entry linearized with cancel ACK; any post-ACK effect ⇒ BLOCKED |
-| DP-08 | FR-01/08, AC-02/08 | No output to wrong run/conversation, even during navigation or owner replacement |
+| DP-06 | **FR-08/20/21**, AC-02/06 | §5.5 single doc effect actor, duplicate listeners, exact composer digest, **actual click count** and lost ACK |
+| DP-07 | FR-17/19/21, AC-06/08 | §5.6 Cancel ACK after positive actor quiescence / observed acceptance; race forcing at **actual click** |
+| DP-08 | FR-01/08, AC-02/08 | No wrong-conversation send after navigation/owner change; exact result-user-turn causality |
 | DP-09 | FR-09/13/14, AC-02–04 | S-A and S-B different decisions from data, same controller; frozen oracle |
 | DP-10 | FR-16/**FR-22**, AC-04/10/11 | Immutable built candidate only **after** Execution Gate, before scored trials |
 | DP-11 | NFR-01–17, AC-09/12 | No-network/read-only mock, synthetic trace, privileges/prompt injection audit |
-| DP-12 | FR-12, AC-10/11 | Versioned unit/fixture/integration/live evidence and AC statuses separately recorded |
+| DP-12 | FR-12, AC-10/11 | Versioned unit/fixture/integration/live evidence, manual recovery/quarantine trace, AC-level results |
+
+| DP-13 | FR-01/02/10, AC-01/05/08 | §3.1 fixed user-sent initial prompt after owner claim, exact prefill/message digest and first assistant predecessor |
+| DP-14 | FR-07/08/11/20/21, AC-06/08/12 | §5.8 positive-evidence manual recovery or permanent quarantine; no old effect replay |
+| DP-15 | FR-03/04/15, AC-05/07 | §4.1 entire-message grammar, code example adversarial tests and Run context |
 
 **DP-01, DP-02, DP-04, DP-06 and DP-07 are priority falsification targets.** The actual effect boundary and browser evidence must be validated independently; this draft does not claim them PROVEN.
 
@@ -307,24 +353,39 @@ Formal proof threshold inherited from Requirements: **S-A at least 10 live trial
 | Area | Selected hypothesis | Rejected / deferred |
 | --- | --- | --- |
 | Conversation lock | One transactional extension coordinator with durable conversation record | Tab-local boolean, non-atomic storage read/write, lease timeout takeover |
-| Model calls | Strict tagged single JSON envelope | Prose interpretation, guessed repair, permissive batch |
-| UI integration | Observable Gemini page via content script | Private Gemini endpoint, Gemini API, account-token extraction |
+| Model calls | Exact **whole-turn** code block with RunMarker/input correlation | Substring or example matching, permissive batch |
+| UI integration | Verified conversation and composer with one isolated-world singleton effect actor | Private Gemini API, multiple sender assumptions, guessed route/DOM |
 | Dispatch | Durable preclaim + bounded in-process deterministic mock | Retries following unknown outcome, arbitrary local commands |
-| Publication | Separate single-use durable intent and UI issuance permit | Assuming execution dedupe is enough; retry on send timeout |
-| Cancellation | Delayed acknowledgment until all possible effect issuers quiesce | Immediate acknowledgment while send permits are live |
+| Publication | Distinct durable intent, single-use nonce, exact composer digest and one synchronous `click()` | Execution dedupe alone, retry-on-timeout, ACK=delivery assumption |
+| Cancellation | Delay ACK until actor quiescence plus observed accepted result / definitive no-issuance | Immediate ACK on permit close, mere worker heartbeat |
 | Transport | No native local host in Phase 0 | Premature commitment to Native Messaging/MCP |
 | Evaluation | Two frozen contrast scenarios + deterministic oracle | Fixed happy-path controller, Gemini self-grading |
 
 ### 9.1 Open blocking questions
 
-- **B-01 UI send:** What precisely is the synchronous, observable irreversible UI send issuance event? Can the content-script permit be retired or proven dead before cancel ACK under all browser interleavings?
-- **B-02 Completion:** Which observable UI transitions establish assistant generation completion across Gemini's supported modes? Are they stable enough for fail-closed operation?
-- **B-03 Identity:** Which browser-visible properties distinguish a conversation across tabs and reloads without private endpoints?
+- **B-01 UI send:** Proposed actual issuance is one synchronous `sendControl.click()` with exact composer digest. Can Gemini really accept this event, and can its async acceptance and the actor's quiescence be proven before Cancel ACK? Unproven ⇒ BLOCKED.
+- **B-02 Completion:** Which actual UI transitions establish assistant **active→completed** and one uniquely attributed reply to `ExpectedInputTurnKey`? No selector is yet proven.
+- **B-03 Identity:** Can a conversation-specific route **and independent visible corroboration** distinguish same chat across tabs and distinct chats with same title? If not, BLOCKED.
 - **B-04 Coordination:** What IndexedDB transaction boundaries, worker restarts and permit recovery states demonstrate the promised single-owner/cancel/effect ordering?
 - **B-05 Protocol:** What happens when Gemini refuses/varies the tagged output? Is the observed success rate adequate without guessing?
 - **B-06 Permission:** Is company approval for installing and automating the extension documented prior to Execution Gate?
+- **B-07 Initial handoff:** Is the prefilled initial prompt exact and user-sent turn independently observable in Gemini Web?
+- **B-08 Singleton/async page behavior:** Can a single effect actor be proven amid reinjection/duplicate listeners and can page-side async send settle be observed?
+- **B-09 Recovery:** Can positive quiescence/reconciliation evidence be obtained? If not, old conversation stays quarantined.
 
-If **B-01** is impossible, that is a **Major design blocker**, not a call to remove the at-most-once or cancel requirements.
+If **B-01/B-02/B-03/B-07/B-08** cannot be justified with the approved UI/browser constraints, they are **Major design blockers**, not excuses to weaken Requirements.
+
+### 9.2 Independent Review finding response matrix (author self-review only)
+
+| Finding | Severity | Revision | Blocking proof |
+| --- | --- | --- | --- |
+| RG-003-DES-001 | Major | §5.5–5.7: actual click, singleton actor, digest, ISSUED/NOT_ISSUED/acceptance, ACK barrier | B-01/B-08, DP-06/07 |
+| RG-003-DES-002 | Major | §3.2–3.3: conversation proof, predecessor input, role and completion | B-02/B-03, DP-01/02 |
+| RG-003-DES-003 | Major | §4.1: entire-turn grammar, exact normalization, ambiguous sample | B-05, DP-03/15 |
+| RG-003-DES-004 | Major | §3.1: one user-sent initial prompt, exclusive owner and first-turn linkage | B-07, DP-13 |
+| RG-003-DES-005 | Minor | §5.8: no-reset/no-replay, positive-evidence recovery or permanent quarantine | B-09, DP-14 |
+
+**All five are author-addressed, not independently RESOLVED. Design Gate remains BLOCKED until a fresh independent Design Review of the exact new committed baseline.**
 
 ## 10. Review gates and authorization limits
 
