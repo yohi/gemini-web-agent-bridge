@@ -404,16 +404,16 @@ Positive proof requires exact actor/document fate (no remaining runnable callbac
 
 Chrome extension uses least permissions and bundled scripts, no dynamic JS evaluation, no credential capture or external network for mocks. Logs store synthetic evidence identifiers/hashes and state transitions, not raw chat, personal data or company invoices.
 
-## 7. Evidence-based contrasting scenarios and oracle
+## 7. Evidence-based contrasting scenarios and independent offline oracle
 
-Both evaluation variants run **the same prompt, tool catalog, extension logic and policy**; only `cost.summary` mock evidence differs.
+Both evaluation variants use **the same user prompt, tool schemas, policy and Coordinator**; only synthetic `cost.summary` evidence differs. The expected S-A/S-B path, fixture label and oracle belong exclusively to the offline evaluation manifest/Grader, **not to bridge dispatch or terminal control**.
 
-| Scenario | Evidence difference | Expected Gemini decision |
-| --- | --- | --- |
-| **S-A** | Synthetic suspicious costly EC2 (predefined resource and threshold) | `TOOL_CALL(cost.summary)` → accepted result → `TOOL_CALL(ec2.metrics)` → accepted result → `FINAL_EVALUATING` → oracle PASS → `FINAL_ANSWER / COMPLETE` |
-| **S-B** | Synthetic cost evidence justifies no EC2 follow-up | `TOOL_CALL(cost.summary)` → accepted result → **zero call signatures** and substantive normal answer → `FINAL_EVALUATING` → oracle PASS → `FINAL_ANSWER / COMPLETE`, **without** `ec2.metrics` |
+| Scenario | Evaluation-only expected model choice | Operational Run terminal | Separate graded PASS condition |
+| --- | --- | --- | --- |
+| S-A (suspicious EC2) | `cost.summary → ec2.metrics → normal final` | `FINAL_ANSWER → COMPLETE` when Q/A safe; no oracle lookup | Both required provider calls, accepted evidence, exact resource/numeric/units/window facts and supported conclusion |
+| S-B (no suspicious EC2) | `cost.summary → normal final`, no `ec2.metrics` | Same Q/A-safe close, without scenario-specific runtime code | No unnecessary follow-up, correct evidence and negative conclusion; no fabricated facts |
 
-Predefined **non-LLM oracle** requires matching actually executed evidence IDs, resource IDs, major costs/utilization, units and time window (within frozen tolerance), correct investigation decision and **zero material fabrication**. Machine-check structured facts where possible; freeze adjudication rubric for prose before trials. A correct-looking answer with fabricated numbers is a failure. An unnecessary S-B second call fails. **Merely not emitting a valid tool call is not evidence of FINAL_ANSWER**; malformed/ambiguous tool-like output, refusal and oracle failure are counted **failed** attempts, not completed Runs. Every formal trial records raw AssistantOutcome, oracle verdict, exact call counts, pending publication state, final terminal reason and inclusion in the immutable trial denominator.
+A prematurely completed S-A answer, an unnecessary S-B call or fabricated cost facts can yield **operational COMPLETE but formal FAIL**. A malformed tool-like output is still `INVALID_OUTPUT`, not a normal final. The independent oracle checks actual tool/publication traces, evidence IDs, numbers, time windows, justified conclusions and zero material hallucination; any pre-frozen narrow human rubric is applied **after** Run termination. Until then verdict `PENDING`; after grading deadline with missing evidence/judgment, `INDETERMINATE` **nonpassing, retained in the original denominator**. No second LLM.
 
 **Gate chronology (do not invert):** Spike Plan Gate approves the *evaluation manifest specification and collection procedure*, Execution Gate then authorizes mock implementation/unscored exploration, **Formal Evaluation Baseline Freeze** then commits and verifies the *actual built code, test harness, fixtures, prompts, protocol, oracle, trial plan and hashes*, **then** scored browser trials start. Any changes after freeze require a new campaign retaining prior pass/fail history.
 
