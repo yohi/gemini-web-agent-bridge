@@ -79,7 +79,8 @@ Merely naming both evidence IDs does not pass if numbers, resources or the concl
 | User run | A user explicitly enables an action scope, allowed tool set, resource/time budgets, start/stop. Model output cannot expand authorization. |
 | Assistant turn | Only a new, completed assistant message in the authorized run may supply a candidate tool call. |
 | Tool call | Bind to run, conversation, origin turn and unique call identity; an ID reused in another scope is not the same call. |
-| Result | Bind to actual provider execution and evidence ID; never accept model-invented results as executed results. |
+| Result | Bind to actual provider execution and evidence ID; never accept model-invented results as executed results. A repeating fixture evidence ID across different runs does not make their executions the same result. |
+| Publication | Give every executed result a stable **run-scoped publication identity**, distinct from execution intent; durable publication ownership and at-most-once UI send issuance are enforced independently. |
 | Host/execution | Untrusted page/model text must pass parser, schema and independent policy authorization before reaching a provider. |
 
 All page DOM, Gemini text, retrieved content and future tool results are **untrusted inputs**; the model may propose a tool but cannot itself grant permission to use it.
@@ -105,7 +106,7 @@ All page DOM, Gemini text, retrieved content and future tool results are **untru
 | FR-05 | Enforce allowlisted mock tools `cost.summary` and `ec2.metrics`, schema validation, explicit run permission and size/time/call quotas **before** execution. | 01–03,07,09 |
 | FR-06 | Mock tools return deterministic synthetic data, error classifications and evidence IDs. They do not read local secrets or access external services. | 01–03,09 |
 | FR-07 | Prevent duplicate call execution across events/rerenders/reloads. Record durable intent, fence owner generation and **serialize actual provider dispatch with cancel confirmation**. Uncertain completion ⇒ `INDETERMINATE` with no auto replay. | 01,06,08 |
-| FR-08 | Bound, attribute and escape tool results. Publish only to originating conversation, **fencing identity/owner and cancel against actual UI send issuance**, not only an earlier check. | 02,03,08 |
+| FR-08 | Bound, attribute and escape tool results. Publish only to originating conversation, **fencing identity/owner and cancel against actual UI send issuance**, not only an earlier check; enforce a separate durable **at-most-once result-publication intent** (FR-20/21). | 02,03,06,08 |
 | FR-09 | Continue after published evidence and accept either model-selected further tool use or evidence-supported completion **per S-A/S-B**, scoring final answers against a frozen, independent oracle. | 02–04 |
 | FR-10 | Expose start, progress, cancel, safe-stop. **Acknowledged cancellation is an irrevocable fence** against starting further provider dispatch or UI send; model cannot expand permission or limits. | 06–09 |
 | FR-11 | Distinguish clean completion, model refusal, invalid output, malformed DOM, timeout, transport failure, navigation, reload and user cancellation. | 06–08 |
@@ -113,10 +114,13 @@ All page DOM, Gemini text, retrieved content and future tool results are **untru
 | FR-13 | Require both S-A and S-B evidence-contrasting autonomous outcomes, without extension-side hard-coded tool sequencing. | 02–04 |
 | FR-14 | Pass final answers only when a precommitted deterministic oracle confirms executed evidence, correct entities/numbers and supported conclusion, with no material hallucination. | 03,04 |
 | FR-15 | Reject an assistant turn with ≥2 executable call candidates **even if identical**, without batching or partial acceptance. | 05,07 |
-| FR-16 | Freeze exact prompts, instructions, protocol, schemas, fixtures, oracles, observable Gemini mode, retry rules, budgets, order and scoring in immutable artifacts before scored tests. | 04,10,11 |
+| FR-16 | **At Spike Plan Gate**, approve the evaluation manifest specification, required artifacts, immutable-freeze/check procedures and change-control rules, **not an as-yet-unimplemented extension commit**. **After Execution Gate has authorized implementation**, freeze the complete implemented extension/test-harness commit plus prompts, schemas, fixtures, oracles, mode and trial rules **before scored tests begin** (FR-22). | 04,10,11 |
 | FR-17 | Serialize acknowledged cancellation with provider-dispatch commit and UI-send issuance; reject calls queued after cancel/owner revocation and test both race orderings. | 06,08 |
 | FR-18 | Use a durable, atomic conversation ownership authority and fenced epochs across tabs and worker restarts, without unsafe automatic takeover. | 05,06,08 |
 | FR-19 | In-flight checks do not authorize effects after cancel/ownership changes; effects must cross a fresh, serialized gate at actual dispatch/send issuance. | 06,08 |
+| FR-20 | Assign each executed tool result a stable publication identity scoped to its **run + conversation + call execution + result version**, distinct from both its tool-execution intent and its evidence ID; an already claimed/issued identity cannot spawn another send. | 02,06,08 |
+| FR-21 | Persist and atomically claim a **Result Publication Intent** before any UI send; serialize its at-most-once issuance boundary against cancel/owner fencing. Deduplicate duplicate events, concurrent publishers and worker restarts; unknown issuance/acknowledgment is `INDETERMINATE` with **no automatic resend**. | 02,06,08 |
+| FR-22 | Perform a separately recorded **Formal Evaluation Baseline Freeze checkpoint** after implementation is authorized and a candidate is built, **before** the first scored trial. Record immutable code/test/fixture/oracle/prompt/attempt-plan commits and hashes. Any post-freeze change begins a new campaign; retain earlier results. | 04,10,11 |
 
 ## 5. Non-functional / security requirements
 
@@ -136,6 +140,9 @@ All page DOM, Gemini text, retrieved content and future tool results are **untru
 | NFR-12 | A completed assistant turn may carry **zero or one** executable tool call; ≥2 causes rejection of all calls. |
 | NFR-13 | Once Cancel is **acknowledged**, **no new provider invocation or Gemini UI send may begin** for the canceled run. A precommitted in-flight effect may finish but cannot be undone or misrepresented as rolled back. |
 | NFR-14 | Formal evaluation oracles are external to Gemini, deterministic where possible and frozen in the baseline. |
+| NFR-15 | **At-most-once UI send issuance per executed result** is separate from at-most-once provider invocation. Publication reservation, sending and recovery use a durable, atomic claim shared across the cooperating bridge contexts; never treat receipt/acknowledgment as guaranteed exactly-once delivery. |
+| NFR-16 | A queued, duplicate, unacknowledged or crash-interrupted publication must **not** be resent merely because completion is unknown. Only independently proven not-issued states may be reconciled under a Design-approved recovery rule; no automatic speculative retries. |
+| NFR-17 | The Spike Plan **specifies** the evaluation freeze artifacts; the post-Execution-Gate candidate **supplies** them for an immutable Formal Evaluation Baseline Freeze checkpoint before any scored trial. |
 
 ### 5.1 Mandatory negative tests
 
@@ -146,7 +153,12 @@ All page DOM, Gemini text, retrieved content and future tool results are **untru
 | Tool result containing malicious instructions or call-shaped text | Never treated as an authoritative command |
 | Cross-tab or cross-conversation change | No execution or result leakage to wrong chat |
 | Duplicate DOM observation or call ID reuse | No double execution |
-| Reload/crash while executing or publishing | No automatic re-execution; surface uncertainty |
+| Reload/crash while executing or publishing | No automatic re-execution **or re-publication**; surface uncertainty |
+| Duplicate result-ready notifications with the same publication identity | A single UI send issuance at most |
+| Two publishers simultaneously claim the same result (same or different tabs/contexts) | At most one wins an atomic durable publication claim; loser does not send |
+| MV3 restart after UI send issuance but before completion acknowledgment | Mark result publication uncertain, **no resend** |
+| Concurrent cancel and result publication claim/send | Order the publication send with cancel and owner fencing; no post-cancel send |
+| Replay after conversation turnover or owner epoch change | Stale publication has no send rights; no duplicate send into new run |
 | Unsupported tool, invalid arguments, malformed syntax | Reject with no provider call |
 | Output too large, missing evidence provenance | Stop safely, no silent truncation that changes meaning |
 | User cancel followed by late completion | Do not publish or restart |
@@ -179,11 +191,13 @@ Required invariants:
 1. No invocation before completion, ownership verification, parser validation, schema validation and authorization.
 2. No duplicated provider execution from DOM rerender or bridge retry.
 3. Before crossing the execution boundary, durable intent and duplicate-prevention ownership are established (concrete storage and atomicity remain Design decisions).
-4. Crash during execution or uncertain result publication never causes speculative automatic replay.
+4. Crash during execution or uncertain result publication never causes speculative automatic replay **of the provider or of Gemini UI result submission**.
 5. Results are published only after ownership re-check; late completion after cancellation cannot leak into new run.
 6. Each terminal state has a visible reason, audit evidence, and explicitly defined manual recovery behavior.
 7. Conversation ownership, cancellation acknowledgment, actual provider dispatch and UI send initiation must have defensible **single ordering points** across cooperating contexts.
 8. Preliminary validation, a tab-local boolean or stale permission snapshot **does not authorize later effects** if cancel or ownership revocation has committed.
+9. Each executed result has its own durable, atomic publication claim; **the same result may initiate a Gemini UI send at most once**, irrespective of duplicate notifications or publisher contexts. A repeated evidence ID in different runs is not sufficient to identify a duplicated publication.
+10. Publication intent ownership, cancel acknowledgment, conversation ownership and actual UI send issuance share a defensible serialized ordering; a prior tool-execution intent never authorizes multiple publications.
 
 ### 6.1 Cancel-versus-effect linearization (RG-002-REQ-006)
 
@@ -195,39 +209,60 @@ Required invariants:
 - **Mandatory concurrency tests:** force both orders of (a) validation/cancel/dispatch, (b) owner recheck/cancel/UI issuance, (c) dispatch/cancel/late result, (d) owner replacement/stale dispatch or send, and repeat critical cases across MV3 worker restart. Assert zero new effects **after the acknowledgment event**, without asserting impossible rollback of an already committed effect.
 
 
+### 6.2 At-most-once Result Publication (RG-002-REQ-008)
+
+**Tool execution idempotency does not imply result-submission idempotency.** The Design and Spike must treat `Result Publication Intent` as a separate durable contract:
+
+1. **Identity:** A publication key binds a specific, actually executed result to **run + conversation + tool call execution + result version**. It is *not* merely a fixture `evidence_id` (which may recur across independent runs), a message text hash, or a browser tab ID. One executed result is eligible for **at most one publication attempt**; a different payload claiming the same result identity is rejected as a conflict.
+2. **Independent durable intent:** Before UI issuance, an authoritative and atomic publication claim/intent is persisted with owner epoch, origin turn/call/result provenance, submission state, and cancellation/fencing context. It must remain valid across content-script duplication, concurrent publishers and MV3 service worker restarts. Tool Execution Intent alone is insufficient.
+3. **At-most-once issuance:** The effective **UI send issuance** is serialized with competing publishers, cancellation acknowledgment and conversation ownership revocation. For the same result identity, **at most one actual send action may be initiated**; losing contenders cannot issue a second send, even if their local DOM observations differ.
+4. **Crash / uncertain acknowledgment:** A worker restart, renderer interruption or lost acknowledgment after issuance (or while it is uncertain whether issuance happened) must **not** trigger re-publication. The result is **`INDETERMINATE`** pending explicit, evidence-backed reconciliation. A durable `reserved` state is not proof of non-issuance; retries require separately established evidence and a Design-reviewed protocol, never assumptions from lack of acknowledgment.
+5. **Separation of guarantees:** This requires **at-most-once send issuance, not exactly-once delivery/visibility in Gemini**. A legitimately issued send may fail to reach the model; without authoritative proof, the extension must stop rather than risk a duplicate.
+6. **Mandatory concurrency tests:** Duplicate result-ready notifications; parallel publication attempts from separate contexts/tabs; repeated callbacks during the same render; crash/restart immediately before, during and **after issuance but before acknowledgment**; cancel before/after claim and before/after send; stale epoch takeover. Assert at most one send initiation per result, zero send after acknowledged cancellation, correct `INDETERMINATE` handling and no speculative resend.
+
+**Feasibility condition:** If the Chrome DOM interaction and bridge coordination cannot provide a credible single issuance boundary and crash-safe claim, **Design or Spike Gate must remain BLOCKED**. Do not silently downgrade the requirement to "best effort".
+
+
 ## 7. Acceptance criteria mapping
 
 | AC | Evidence required | Corresponding requirements |
 | --- | --- | --- |
 | AC-01 | Live `cost.summary` executed once under exclusive conversation owner | FR-01–07,18 |
-| AC-02 | S-A evidence returned to owning chat; Gemini selects next `ec2.metrics` | FR-01,08,09,13 |
+| AC-02 | S-A evidence returned to owning chat **with at-most-once result submission**, then Gemini selects `ec2.metrics` | FR-01,08,09,13,20,21 |
 | AC-03 | S-A two-tool and S-B one-tool conclusions pass frozen evidence/number/reasoning oracle | FR-08,09,13,14 |
 | AC-04 | Frozen S-A/S-B campaigns and complete denominators, rates, durations, failures | FR-09,12,13,14,16 |
 | AC-05 | No execution for partial/quoted/stale/user/other-chat/multiple-call content | FR-01–04,15,18, NFR-04 |
-| AC-06 | Dedupe, dual-tab owner race, worker restart, stale fence, cancel-effect races | FR-07,11,17–19, NFR-05,11,13 |
+| AC-06 | Execution **and publication** dedupe, concurrent publishers, worker restart, owner fencing and cancel-effect races | FR-07,11,17–21, NFR-05,11,13,15,16 |
 | AC-07 | Invalid tool/schema/budget/DOM and multi-call response fail closed | FR-04,05,10,15 |
-| AC-08 | Navigation, cancel, provider failures and cancel-versus-dispatch/send races isolated | FR-01,08,10,11,17–19 |
+| AC-08 | Navigation, cancel, provider failure, publication uncertainty, and cancel-versus-dispatch/send races isolated | FR-01,08,10,11,17–21 |
 | AC-09 | Evidence provider has no write/network/credentials | FR-05,06, NFR-01 |
-| AC-10 | Independent unit/fixture/MV3/live checks including dual-tab contention and contrasting scenarios | FR-12,16,18, NFR-09 |
-| AC-11 | Reproduction, immutable *evaluation* baseline, exact mode/fixtures/oracle and logs | FR-12,16 |
-| AC-12 | Threat model, negative/concurrency tests and residual scope of ownership guarantee | NFR-03–08,11–14 |
+| AC-10 | Independent unit/fixture/MV3/live checks including dual-tab and **duplicate publication** races, contrasting scenarios | FR-12,16,18,20–22, NFR-09 |
+| AC-11 | Reproduction and **post-implementation frozen** evaluation commit/blob manifest, exact mode/fixtures/oracle, publication attempts and logs | FR-12,16,21,22 |
+| AC-12 | Threat model, negative/concurrency tests, **at-most-once result publication** and residual ownership risks | NFR-03–08,11–16 |
 
-### 7.1 Immutable evaluation baseline and proof threshold (RG-002-REQ-005)
+### 7.1 Evaluation manifest, post-implementation freeze and proof threshold (RG-002-REQ-005/007)
 
-**Before the first scored trial**, Spike Plan Gate must record an immutable Git **evaluation manifest with commit and file blob hashes**, including:
+**Gate ordering is mandatory:**
+
+1. **Spike Plan Gate (no implementation authorized yet):** Review and approve the **specification** of the evaluation manifest: required artifacts, exact freeze procedure, scoring/oracle method, trial protocol, thresholds, change-control rules and evidence collection process. Approval does **not** assert that implementation commit/blob hashes already exist or are frozen.
+2. **Execution Gate:** After the preceding gates are approved, explicitly authorize **mock-only implementation, exploratory tests and preparation of the candidate**. Development tests and exploratory live-browser checks are **unscored**, must be labelled as such, and cannot be selectively promoted into formal trials.
+3. **Formal Evaluation Baseline Freeze (after candidate implementation, before first scored trial):** Assemble and commit the **complete implemented** candidate, test harness, fixture and oracle set, protocol, prompts and exact trial schedule. Record the immutable evaluation manifest's Git commit and blob hashes, independently verify its contents and approve it **before** scored evaluation begins. A missing or unverifiable implementation baseline prevents scored execution.
+4. **Formal scored evaluation:** Execute precisely the frozen trial schedule without code/prompt/fixture/rubric changes. A post-freeze change starts a **new named evaluation campaign** with new hashes and full denominators. Earlier failed and successful attempts remain reported; do not silently exclude or selectively pool them.
+
+**Evaluation manifest content (defined at Spike Plan Gate, frozen at the later checkpoint):**
 
 - Exact user prompt, Gemini-facing setup/instructions, complete tool catalog and call contract/schema; all synthetic mock fixtures for S-A/S-B; all scenario decision thresholds, expected resource IDs/arguments and evidence IDs.
 - The independent deterministic answer oracle, rounding/tolerance rules, human adjudication rubric (if any), explicit pass/fail examples, failure taxonomy, allowed timeouts, request/turn/tool budgets and stop policy.
-- Extension/test harness and fixture/DOM-adapter baselines, Chrome/OS versions and **observable Gemini model/mode selection**; if the Web UI cannot pin the model, record the available setting, UI state and timestamps without pretending to freeze an inaccessible backend version.
-- A preregistered S-A/S-B trial schedule (including order), fixed number of attempts and treatment of timeouts, Gemini refusals, invalid responses, reloads and user aborts. Every attempted formal trial remains in its original denominator. Retries count as new attempts and **never erase the original failure**.
-- Formal runs prohibit prompt tweaking, fixture swaps, tool-set edits, post-hoc oracle relaxation, selective exclusion or changing the denominator. Any artifact/rule modification starts a **new campaign with new immutable identifiers**; historical results remain available and are not selectively pooled.
+- **Built extension / test harness source commit and file blob hashes** and fixture/DOM-adapter baselines, Chrome/OS versions and **observable Gemini model/mode selection**; if the Web UI cannot pin the model, record the available setting, UI state and timestamps without pretending to freeze an inaccessible backend version.
+- The preregistered S-A/S-B trial schedule (including order), fixed number of attempts and treatment of timeouts, Gemini refusals, invalid responses, reloads and user aborts. Every formal attempt remains in its original denominator. Retries count as new attempts and **never erase the original failure**.
+- No prompt tweaking, fixture swaps, tool-set edits, post-hoc oracle relaxation, selective exclusion or changing the denominator within one frozen campaign. Version changes or observed material drift require an explicitly recorded new campaign; historical attempts remain visible.
 
 **Scored live-browser threshold:**
 
 - **S-A: ≥10 formal live trials; ≥90%** end-to-end completion with correct second tool and oracle-passing grounded answer.
 - **S-B: ≥10 formal live trials; ≥90%** end-to-end completion without unnecessary `ec2.metrics`, with oracle-passing grounded answer.
 - **Same prompt / tool protocol / bridge logic for both scenarios**, only synthetic tool data differ. No per-turn manual intervention.
-- **Safety violations = zero** across the entire campaign and adversarial/concurrency tests: unauthorized call, duplicate execution, two active owners of same conversation, dispatch/send after acknowledged cancel, cross-conversation result, real API invocation or leak of sensitive data. Any confirmed violation ⇒ **BLOCKED**.
+- **Safety violations = zero** across the entire campaign and adversarial/concurrency tests: unauthorized call, duplicate provider execution, **duplicate UI send issuance of one tool result**, two active owners of same conversation, dispatch/send after acknowledged cancel, cross-conversation result, real API invocation or leak of sensitive data. Any confirmed violation ⇒ **BLOCKED**.
 - Each AC requires attributable evidence; passing fixture/unit tests does not prove live Gemini behavior.
 - These rates are **only a preliminary feasibility gate**, not a production SLO nor a statistically reliable estimate of operational success.
 
@@ -238,13 +273,13 @@ Status rubric:
 
 ## 8. Reproducibility & reports
 
-Plan for a report under `docs/reports/` with: Issue ID; immutable Requirements/Design/Plan blob IDs and test-commit SHA; **frozen evaluation manifest commit and blob hashes (prompts, schemas, scenario fixtures, oracles, grading and trial order)**; UTC+JST execution time; OS/Chrome/extension versions; observable Gemini mode and UI conditions; mock input/output with evidence ID; sanitized **owner generations and cancel/dispatch/UI issuance event ordering**; actual call counts, **all attempt logs/denominators per scenario including refusals, errors and retries**, oracle outcome, AC-level status, residual risks and reproducibility steps.
+Plan for a report under `docs/reports/` with: Issue ID; immutable Requirements/Design/Plan blob IDs; Spike Plan approved **manifest specification**, Execution Gate authorization, **post-implementation Formal Evaluation Baseline Freeze approval**, implementation/test-harness commit SHA and **evaluation manifest commit/blob hashes** (prompts, schemas, scenario fixtures, oracles, grading and trial order); UTC+JST execution time; OS/Chrome/extension versions; observable Gemini mode and UI conditions; mock input/output with evidence ID; sanitized owner generations and cancel/dispatch/**result publication intent ID and UI issuance** ordering; actual provider calls **and UI send issuance counts**, all attempt logs/denominators per scenario including refusals, errors and retries, oracle outcome, AC-level status, residual risks and reproduction steps.
 
 Tests must cover:
 1. Unit: grammar/schema/policy/state transitions/idempotency/recovery.
 2. DOM fixtures: partial output, examples, role boundaries, multiple candidates, navigation, UI drift.
-3. MV3 integration: content/background messaging, worker lifecycle, durable recovery, **atomic same-conversation dual-tab acquisition, worker restart fencing, and both cancel-before-effect/effect-before-cancel orderings for actual provider dispatch and UI send**.
-4. Authenticated live Gemini Web: **both frozen S-A and S-B scenarios** plus adverse interaction/concurrency tests, **synthetic data only**, with browser state prepared manually but no intervention during a tool loop.
+3. MV3 integration: content/background messaging, worker lifecycle, durable recovery, **atomic same-conversation dual-tab acquisition, worker restart fencing, both cancel-before-effect/effect-before-cancel orderings, duplicate and concurrent result-publication claims, and crashes before/after UI send issuance but before acknowledgment**.
+4. Authenticated live Gemini Web: **both frozen S-A and S-B scenarios** plus adverse interaction/concurrency and result-publication de-duplication tests, **synthetic data only**, with browser state prepared manually but no intervention during a tool loop.
 
 ### 8.1 Closure matrix for the reported Requirements findings
 
@@ -257,24 +292,32 @@ Tests must cover:
 | RG-002-REQ-005 — Moderate | §7.1 immutable prompt/tool/fixture/oracle/mode/trial baseline | FR-16; AC-04/11 |
 | RG-002-REQ-006 — Moderate | §6.1 cancel acknowledgment serialized with actual dispatch/UI send | FR-17/19; AC-06/08 |
 
-All six are **author-addressed, not independently verified**. Requirements Gate remains BLOCKED until a fresh review of this exact Git commit and blob.
+The prior independent review found RG-002-REQ-001–006 **RESOLVED at the Requirements level**, not implemented/proven in Chrome. The following two new findings have now been **author-addressed and still require an independent fresh review**:
+
+| Finding | Requirements response | Evidence |
+| --- | --- | --- |
+| **RG-002-REQ-007 — Major** | §7.1 and §9 separate Spike Plan manifest **specification** from post-implementation **Formal Evaluation Baseline Freeze** | FR-16/22, AC-04/11 |
+| **RG-002-REQ-008 — Moderate** | §3/§6.2 distinguish result-publication identity and durable claim from tool execution; at-most-once send issuance, no retry on uncertainty | FR-08/20/21, NFR-15/16, AC-02/06/08 |
+
+**Requirements Gate remains BLOCKED.** This author's edits do not constitute independent review or approval.
 
 
 ## 9. Review gates and authorization
 
 1. **Requirements Gate (now):** Independent review of this draft against Issue #1, constraints, AC, security, and testability. DRAFT until explicitly approved.
 2. **Design Gate (later):** Choose completion evidence, conversation binding, protocol, DOM adapter, durable dedup, exact policy boundaries, UI publishing, architecture and recovery. Native Messaging is not decided here.
-3. **Spike Plan Gate:** Review tasks, RED/GREEN tests, browser evidence, environment, frozen limits/threshold and stopping rules.
-4. **Execution Gate:** Explicitly authorize *mock-only* Phase 0 development and live verification **only after company permission for extension installation and automated Gemini UI actions in the test environment is recorded**.
-5. **Decision Gate:** Independent PROVEN/BLOCKED/INCONCLUSIVE review. Only PROVEN permits proposing the next phase.
+3. **Spike Plan Gate:** Approve tasks, RED/GREEN strategy, browser evidence plan, immutable evaluation **manifest specification**, prospective limits/thresholds, change rules and freeze procedure. **Do not require an implementation commit or actual frozen candidate at this gate.**
+4. **Execution Gate:** Explicitly authorize *mock-only* Phase 0 development and **unscored exploratory** tests, only after company permission for extension installation and automated Gemini UI actions in the test environment is recorded.
+5. **Formal Evaluation Baseline Freeze checkpoint:** **After** the authorized candidate, tests, fixtures and scoring artifacts are built and **before** any formal scored trial, verify and approve one immutable evaluation manifest referencing the actual extension/test-harness implementation and all required Git commit/blob hashes. No scored trials without this checkpoint.
+6. **Formal Evaluation & Decision Gate:** Run the preregistered scored S-A/S-B and safety trials against the frozen baseline, then independently judge PROVEN/BLOCKED/INCONCLUSIVE. Only PROVEN permits proposing Phase 1. A changed candidate requires a **new** freeze/campaign; previous attempts stay in the record.
 
 ### Open questions for review
 
 - **OQ-01:** Does company policy permit an extension to inspect and automatically interact with Gemini Web? How is permission recorded?
 - **OQ-02:** What browser-visible evidence establishes assistant-turn completion and stable conversation identity without undocumented backend calls?
 - **OQ-03:** What canonical call envelope minimizes model format deviation while eliminating accidental execution from normal code blocks?
-- **OQ-04:** How are atomic ownership, durable execution intents, MV3 worker restarts, cancel-versus-effect commit gates and uncertain UI publication represented?
+- **OQ-04:** How are atomic ownership, distinct **Tool Execution Intent** and **Result Publication Intent**, MV3 worker restarts, cancel-versus-effect commit gates, at-most-once UI send issuance and uncertainty represented?
 - **OQ-05:** What bounded automatic recovery (if any) is safe without re-executing a tool?
 - **OQ-06:** What future local-runtime transport minimizes credential exposure without increasing browser privileges?
 
-**Change control:** A documentation PR does not authorize implementation. No AWS/Bitbucket access or company secrets in this branch. This author's edits are not a fresh independent review or Requirements Gate approval.
+**Change control:** A documentation PR does not authorize implementation. No AWS/Bitbucket access or company secrets in this branch. The author’s response to RG-002-REQ-007/008 is not a fresh independent review or Requirements Gate approval.
