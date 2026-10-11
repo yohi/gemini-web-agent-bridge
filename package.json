@@ -1,0 +1,26 @@
+{
+  "name": "gemini-web-agent-bridge-phase-0",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Mock-only MV3 scaffold; no Gemini automation or real providers",
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint scripts src tests",
+    "build:extension": "node scripts/build-extension.mjs",
+    "test:unit": "vitest run tests/unit",
+    "verify:task01": "npm run typecheck && npm run lint && npm run test:unit && npm run build:extension"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.29",
+    "@typescript-eslint/eslint-plugin": "8.46.2",
+    "@typescript-eslint/parser": "8.46.2",
+    "esbuild": "0.25.12",
+    "eslint": "9.39.1",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}
