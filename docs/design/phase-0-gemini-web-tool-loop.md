@@ -440,8 +440,8 @@ Formal proof threshold inherited from Requirements: **S-A at least 10 live trial
 | DP-14 | FR-07/08/11/20/21, AC-06/08/12 | §5.8 **independent Q (actor quiescence) and A (result acceptance settlement)**, `ISSUED` alone blocks same-owner release, late acceptance and quarantine tests |
 | DP-15 | FR-03/04/15, AC-05/07 | §4.1 entire-message grammar, code example adversarial tests and Run context |
 | DP-16 | FR-05/06, AC-01/03/09 | Mock provider deterministic synthetic fixture provenance and actual call counts; **no network, credentials, filesystem or write effects** |
-| DP-18 | FR-09/11/12/13/14/16/22, AC-03/04/10/11 | Separate `FormalTrialRecord`, human-rubric PENDING, grader restart/INDETERMINATE, no runtime owner mutation, no fixture-label-driven bridge tool control |
 | DP-17 | FR-03/04/09/11/13/14/15, AC-03/04/05/07/10 | §4.3 online four-way classifier, call-shaped negatives/refusal, persisted final snapshot, no fixture label/oracle lookup by Coordinator |
+| DP-18 | FR-09/11/12/13/14/16/22, AC-03/04/10/11 | Separate `FormalTrialRecord`, human-rubric PENDING, grader restart/INDETERMINATE, no runtime owner mutation, no fixture-label-driven bridge tool control |
 
 **DP-01, DP-02, DP-04, DP-06 and DP-07 are priority falsification targets.** The actual effect boundary and browser evidence must be validated independently; this draft does not claim them PROVEN.
 
