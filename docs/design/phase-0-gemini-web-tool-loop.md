@@ -146,7 +146,7 @@ Example (not executable **here**; valid only as the *entire* assistant output in
 
 **Validation order:** active user-authorized Run/owner → specific conversation and expected predecessor → fresh completed assistant evidence → full-body grammar + **0-or-1 candidate count** → `run_marker` and `responding_to` match the journaled RunMarker and **predecessor's preissued InputCorrelationId**, which must both have been visible to Gemini in that exact initial prompt or tool-result user message (not authorization by themselves) → strict JSON schema (reject duplicate keys, unknown keys, excessive size/depth, bad IDs or tool) → independent run policy/quota/cancel + final turn/owner fencing → durable ExecutionIntent → actual provider dispatch. A malformed or multi-call turn never executes a subset.
 
-**Irreducible ambiguity:** If Gemini emits a **whole-message, structurally identical block as a code example**, page output alone cannot establish the model's private intention. A valid call is considered only while the run is **explicitly awaiting a model-selected tool decision for the authorized investigation input**. If the user task asks to *explain the protocol*, or the causal context is ambiguous, no call executes. RunMarker is a correlation field, **not proof of semantic intent or authorization**. This residual limitation and adversarial example-only tests are mandatory review/proof items, not grounds to claim perfect intent recognition.
+**Irreducible ambiguity:** If Gemini emits a **whole-message, structurally identical block as a code example**, page output alone cannot establish the model's private intention. **§4.3 classifies the entire assistant output before any execution or terminal transition**; a malformed or embedded call must not be silently promoted to a normal final answer. A valid call is considered only while the run is **explicitly awaiting a model-selected tool decision for the authorized investigation input**. If the user task asks to *explain the protocol*, or the causal context is ambiguous, no call executes. RunMarker is a correlation field, **not proof of semantic intent or authorization**. This residual limitation and adversarial example-only tests are mandatory review/proof items, not grounds to claim perfect intent recognition.
 
 
 ### 4.2 Tool result envelope
@@ -167,6 +167,44 @@ Example (not executable **here**; valid only as the *entire* assistant output in
 
 Only an **actually executed** mock result can create this envelope. The bridge must create **a fresh InputCorrelationId before preparing the result text**, include it in the visible result envelope as `next_input_correlation_id`, then journal this ID, originating `run_marker` and exact outgoing payload digest **before UI send**; the result text does not grant permission. The bridge quotes/escapes embedded instructions, call-shaped JSON, markup and fake roles as **data**, and never parses its own result message as a model-origin call. This is an ordinary Gemini UI message, **not** the native tool role. If the model ignores it, mark the trial failed; do not fabricate success. Oversized data fails rather than being silently truncated.
 
+### 4.3 AssistantOutcome classifier and final-answer boundary (RG-003-DES-006)
+
+**One deterministic classification authority:** the MV3 coordinator classifies an *immutable snapshot* of exactly one new assistant turn after §3.3 proves its `ConversationKey`, `ExpectedInputTurnKey`, assistant role, generation-completion transition and matching `bodyDigest`. The content script may report structural observations, but neither the model nor the DOM adapter may decide final success. The coordinator alone runs a pure `classifyAssistantOutcome` function over the verified snapshot, durable run state, expected predecessor, journal evidence and **precommitted offline oracle** (the formal trial grader remains independently auditable).
+
+```ts
+type AssistantOutcome =
+  | { kind: "TOOL_CALL"; executionIntentId: string; originTurnKey: string }
+  | { kind: "FINAL_ANSWER"; originTurnKey: string; oracleResultId: string }
+  | { kind: "INVALID_OUTPUT"; originTurnKey?: string; reason: string }
+  | { kind: "MODEL_REFUSAL"; originTurnKey: string; refusalEvidence: string };
+// Output is not authoritative unless it is persisted against RunId, OwnerEpoch,
+// ConversationKey, ExpectedInputTurnKey, AssistantTurnKey and completed bodyDigest.
+```
+
+**Classification precedence is mandatory and non-inferential:**
+
+1. **Eligibility gate:** Require the unique attributable, fully completed assistant turn and fresh current owner/epoch/input/turn digest; check no cancel, mutation or competing input. Failure to establish this evidence ⇒ `INVALID_OUTPUT` with `TURN_UNATTRIBUTABLE` or `MODEL_NOT_COMPLETE`/state-specific error, **never** `FINAL_ANSWER`; do not assume a paused stream has ended. The run becomes `BLOCKED` (or `INDETERMINATE` if an outstanding effect is uncertain).
+2. **Call-shape inventory before final detection:** Inspect the **entire message DOM structure and bounded raw reconstructed body**, including nested blocks. Declare `callLike` if **any** (a) `gemini-agent-call` fence/language marker (even if malformed, nested or quoted), (b) JSON/object or code block containing the reserved discriminator `"kind":"tool_call"` with allowed JSON whitespace, or (c) code/JSON object containing **at least two** reserved protocol field names among `"call_id"`, `"tool"`, `"arguments"`, `"run_marker"`, `"responding_to"` in tool-request context. Matching ordinary **prose** references to `cost.summary`/`ec2.metrics` alone is **not** a call signature. Scanner failure, unknown renderer or incomplete structured body ⇒ `INVALID_OUTPUT`, not “zero candidates.” All patterns and bounds must be frozen in Spike Plan; do not use natural-language intention inference.
+3. **Call precedence:** If `callLike` is true, attempt §4.1 **whole-turn** grammar, expected marker/correlation, canonical JSON, strict schema, at-most-one candidate, allowlist/quotas and run policy. **Exactly one fully valid authorized call** ⇒ `TOOL_CALL` and reserve ExecutionIntent. Any zero/malformed/embedded/quoted call, multiple candidates (even identical), mismatch, unauthorized tool or schema failure ⇒ `INVALID_OUTPUT` and `BLOCKED` with no invocation. Do not fall through from a rejected call to final-answer evaluation.
+4. **Refusal precedence for non-call output:** If no call signature exists, recognize `MODEL_REFUSAL` **only** from a uniquely identified dedicated refusal/status UI state or one of the **pre-registered explicit refusal-only formats/patterns** in the frozen evaluation manifest, with matching assistant provenance. An ambiguous mixture of refusal-like text and purported analysis ⇒ `INVALID_OUTPUT`; never guess refusal intent through semantic inference. Refusal ⇒ terminal failure `BLOCKED`, counted as a failed trial.
+5. **Normal final candidate and oracle:** Only a no-`callLike`, non-refusal, substantive completed ordinary assistant answer with unique causal input can enter `FINAL_EVALUATING`. Before accepting `FINAL_ANSWER`, use the **precommitted non-LLM fixture oracle** on (i) actually executed mock calls/results, (ii) accepted user-visible result messages, (iii) final answer facts, and (iv) expected S-A/S-B path. Require all correct evidence IDs, resource identities, costs, units/windows, evidence-supported conclusion, **no material hallucination**, no missing/unneeded tool and no unsettled effect. Oracle failure/unknown ⇒ `INVALID_OUTPUT` with `FINAL_ORACLE_FAILED` / `FINAL_ORACLE_INDETERMINATE`; `BLOCKED`, not `COMPLETE`. The oracle may include an explicitly pre-frozen narrow human grading rubric, but there is **no runtime second LLM or Gemini self-grading**.
+6. **Immutable single disposition:** Atomically persist `AssistantOutcome` with run/turn/digest/oracle verdict before any next transition. Duplicate observation of the same turn yields the stored outcome; after `FINAL_ANSWER`, `INVALID_OUTPUT` or `MODEL_REFUSAL`, any late model output, regeneration or manual user input **cannot re-open the run**. No execution or publication may be initiated by a rejected or final turn.
+
+| Completed assistant body | `callLike` / structural result | Classification and disposition |
+| --- | --- | --- |
+| Exactly one full-turn canonical call, correct predecessor, schema and authorization | true, uniquely valid | `TOOL_CALL` → guarded ExecutionIntent/provider path |
+| Any embedded call example, malformed/partial call, multiple blocks, wrong token/tool | true but invalid | `INVALID_OUTPUT` → `BLOCKED`, **zero provider entries** |
+| Plain explanation of costs, including tool names as prose, with no protocol structures | false; not refusal | Run the oracle; only PASS ⇒ `FINAL_ANSWER` / completion eligible |
+| Explicit, uniquely recognized refusal | false; refusal evidence | `MODEL_REFUSAL` → terminal `BLOCKED` |
+| Empty, ambiguous or unrecognized/unsupported DOM content | unknown or no substantive final content | `INVALID_OUTPUT` → `BLOCKED` / `INDETERMINATE` where effect uncertainty persists |
+
+**Safety limit:** A malformed invocation expressed entirely as unrelated natural-language prose may be observationally indistinguishable from ordinary prose. **It is never executed**; it also cannot be marked a successful final answer unless the independent, evidence-based oracle passes the frozen scenario constraints. Do not turn a natural-language sentence into an implicit tool request or let “zero valid tool calls” alone imply success. Structural scan uncertainty always fails closed.
+
+**S-A:** after `cost.summary` the oracle **cannot** approve a final answer without a justified `ec2.metrics` execution + uniquely accepted result; after `ec2.metrics` a grounded plain final may pass. **S-B:** after the accepted `cost.summary` result, a plain evidence-grounded final may pass **without** `ec2.metrics`; an unnecessary second tool call causes the S-B trial to fail at oracle/policy assessment rather than being treated as success. Before any successful terminal transition, there must be **no pending ExecutionIntent/PublicationIntent or unresolved acceptance state**, and §5.8's owner-release invariants must hold. A valid-but-unnecessary call does not certify S-B success.
+
+**Proof plan:** Positive S-A two-tool/final, S-B one-tool/final, oracle false-positive/negative and refused output; negative cases for malformed tagged fence, quoted/embedded/duplicate call, malformed reserved JSON, irrelevant prose/tool-name mentions, empty/stalled output, unknown Gemini DOM mode, manual interruption and hallucinated final answers. Assert exactly one classified outcome per completed turn, zero effects on invalid/refusal/final, and `COMPLETE` only after oracle PASS with all prior publications accepted. Unit/DOM-fixture/MV3-integration and actual Gemini Web evidence remain distinct.
+
+
 ## 5. Durable state and exclusivity design
 
 ### 5.1 Records and identities
@@ -176,6 +214,7 @@ Only an **actually executed** mock result can create this envelope. The bridge m
 | `ConversationOwner` | conversationKey, runId, monotonic ownerEpoch, document binding, owner status, durable terminal/reconciliation marker |
 | `Run` | runId, ownerEpoch, **RunMarker, InitialPromptDigest, InitialInputCorrelationId, current InputCorrelationId → observed ExpectedInputTurnKey binding, launchStage**, allowed tools/budgets, model turn count, tool call count, FSM state, cancel status, active effect permits |
 | `TurnObservation` | runId, **InputTurnKey, AssistantTurnKey, predecessorInputTurnKey, role, transcriptOrder, observed active→completed evidence**, completed snapshot digest, document generation |
+| `AssistantOutcomeRecord` | runId, conversationKey, ownerEpoch, AssistantTurnKey, ExpectedInputTurnKey, immutable body digest, **TOOL_CALL / FINAL_ANSWER / INVALID_OUTPUT / MODEL_REFUSAL**, structural scan reason, schema/policy status, oracle verdict/reference, terminal failure code |
 | `ExecutionIntent` | unique run+conversation+turn+call identity, args digest, ownerEpoch, `RESERVED/MAY_HAVE_DISPATCHED/FINISHED/UNKNOWN`, actual provider count |
 | `PublicationIntent` | **separate** stable identity derived from run+conversation+executed result+resultVersion, **exact canonical composer text/payload digest**, bound tab/frame/document/navigation generation, ownerEpoch, single-use nonce, **sender identity**, `RESERVED/PERMIT_OUTSTANDING/ISSUED/OBSERVED_ACCEPTED/UNKNOWN/ABORTED`, UI send issuance count |
 | `AuditEvent` | serial event order, bounded IDs, permission decision, intent status, cancellation/dispatch/send order, redacted failure reason |
@@ -187,21 +226,31 @@ Only an **actually executed** mock result can create this envelope. The bridge m
 ### 5.2 Run state machine
 
 ```text
-IDLE → ACQUIRING_OWNER → AWAIT_INITIAL_USER_SEND → AWAITING_MODEL → VALIDATING
-                                               ↓
-                                          EXECUTING
-                                               ↓
-                                          RESULT_READY
-                                               ↓
-                                      PUBLISHING_RESULT
-                                               ↓
-                                  AWAITING_MODEL / COMPLETE
+IDLE → ACQUIRING_OWNER → AWAIT_INITIAL_USER_SEND → AWAITING_MODEL
+                                                        ↓ completed, attributed turn
+                                                CLASSIFYING_OUTCOME
+                                                        │
+                                   ┌────────────────────┼─────────────────────┐
+                                   ↓                    ↓                     ↓
+                               TOOL_CALL        FINAL_CANDIDATE       INVALID / REFUSAL
+                                   ↓                    ↓                     ↓
+                               VALIDATING        FINAL_EVALUATING          BLOCKED
+                                   ↓                    │
+                               EXECUTING           oracle PASS?
+                                   ↓                 │       │
+                              RESULT_READY          YES     NO/UNKNOWN
+                                   ↓                 ↓       ↓
+                           PUBLISHING_RESULT       COMPLETE BLOCKED
+                                   ↓
+                             AWAITING_MODEL
 
-On faults → BLOCKED / INDETERMINATE
-On cancel request → CANCEL_PENDING → CANCELLED_ACK (only after effect gates quiesce)
+On faults / unproven provenance / oracle failure → BLOCKED / INDETERMINATE
+On cancel request → CANCEL_PENDING → CANCELLED_ACK (only when §5.6 and §5.8 quiescence plus acceptance are proven)
 ```
 
 The state transitions are journaled with owner epoch, expected predecessor input and document generation. The **initial user prompt is sent once by the human**; all later tool-result sends require a bridge PublicationIntent. Every transition distinguishes intent reservation from **actual** effect issuance; a reserved operation can be lost without violating at-most-once.
+
+**Terminal contract (§4.3 / RG-003-DES-006):** Every eligible completed assistant turn first enters `CLASSIFYING_OUTCOME`; `TOOL_CALL` proceeds to validation/dispatch, an ordinary final candidate enters `FINAL_EVALUATING`, and `INVALID_OUTPUT`/`MODEL_REFUSAL` enters `BLOCKED` (or `INDETERMINATE` for outstanding uncertain effects). **Only** oracle PASS plus the absence of unresolved dispatch/publication and verified §5.8 owner-settlement permits `FINAL_ANSWER → COMPLETE`. Persist outcome classification, oracle verdict and terminal reason once per AssistantTurnKey; no retry/re-classification after failure. `COMPLETE` is an authenticated **run success**, not a claim that the browser UI's model internals were correct or that a failed trial should be excluded.
 
 ### 5.3 Conversation owner
 
@@ -282,13 +331,22 @@ Record **actual mock provider entry counts and actual DOM send-control `click()`
 | State | Permitted resolution | Prohibited |
 | --- | --- | --- |
 | Pre-effect BLOCKED with affirmative proof **no actor can still initiate** a send/dispatch | Cancel and atomically close/release the owner after positive quiescence evidence | Assuming an unobserved initial prompt was sent |
-| `INDETERMINATE` with unknown invocation/publication | Manual inspection of sanitized trace; **quarantine the conversation** and seek independent proof of actor termination/effect status | Resend/reinvoke, clear journal, timeout-based takeover, declaring `NOT_ISSUED` from absent acknowledgment |
-| Proof of an earlier `ISSUED` or `NOT_ISSUED` event plus no possible pending issuer | Explicit operator confirmation and durable fenced terminal reconciliation; **no old effect retry** | Reusing an old ExecutionIntent/PublicationIntent for a second attempt |
+| `INDETERMINATE` with unknown invocation/publication **or `ISSUED` without `OBSERVED_ACCEPTED`** | Manual inspection of sanitized trace; **quarantine the conversation**. Distinguish actor-quiescence evidence from **Gemini acceptance-state evidence**; do not release owner while acceptance could still appear | Resend/reinvoke, clear journal, timeout-based takeover, declaring `NOT_ISSUED` from absent acknowledgment or treating mere `ISSUED` as settled |
+| Positive `NOT_ISSUED` **and** irrevocably quiescent sender; **or** `OBSERVED_ACCEPTED` with exact, unique matching user result turn **and** quiescent sender | With all other execution/publication obligations resolved, an operator may confirm durable fenced terminal reconciliation and release the **same conversation owner**; no old effect retry | Releasing on `ISSUED` alone; resending old result or ignoring another unknown PublicationIntent |
 | Permanently unreconcilable old conversation | Keep **that conversation permanently blocked for automation**; Gemini manual use is allowed. A **distinct new verified conversation** may be used for a fresh run **only when all old send-capable actors/documents are positively quiescent and no installation-wide uncertainty remains** | Silent same-conversation replacement, unlocking by browser tab closure alone, restarting the extension as proof of no send |
 
-Positive proof requires: exact old actor/document fate (no remaining runnable callbacks), owner-epoch fencing, a corroborated current transcript or conclusively destroyed document, and audit-confirmed effect ordering. A user closing a tab or pressing Reset alone cannot establish whether a result reached Gemini. If positive proof is unavailable, **safety wins over liveness**: no same-conversation recovery, potentially indefinite BLOCKED. No special manual override exists in Phase 0.
+**Two independent reconciliation predicates (RG-003-DES-005):**
 
-**Typed failure codes for writing-plans:** `CONVERSATION_UNBOUND`, `INITIAL_PROMPT_MISMATCH`, `TURN_UNATTRIBUTABLE`, `ROLE_AMBIGUOUS`, `MODEL_NOT_COMPLETE`, `CALL_GRAMMAR_INVALID`, `MULTIPLE_CALL_CANDIDATES`, `SENDER_NOT_SINGLETON`, `COMPOSER_DIGEST_MISMATCH`, `PUBLICATION_UNKNOWN`, `OWNER_EPOCH_STALE`, `CANCEL_EFFECT_UNSETTLED`, `RECOVERY_QUARANTINED`. Preserve distinct `PERMIT_OUTSTANDING`, `UI_SEND_ISSUED`, and `OBSERVED_ACCEPTED`.
+- **Actor/effect quiescence** `Q`: positive proof that *all* old provider dispatchers and content-script click actors have either finished their actual effects or are irrevocably unable to start any; no queued nonce/callback can act, and the old owner epoch is fenced. This controls **Cancel ACK's prohibition of future new effects**. Document destruction may help prove actor retirement, but **not** Gemini acceptance.
+- **Result acceptance settlement** `A`: for **each** old PublicationIntent, either **(a)** positively proved `NOT_ISSUED` with retired permit and no possible future click **or (b)** exactly one canonical result user turn is `OBSERVED_ACCEPTED` in the corroborated conversation and matches the publication payload/correlation. **`ISSUED` alone is never `A`**; disappearance of the document, no reply/ACK or passage of time cannot establish `A`. An execution intent must also have a known no-entry or known completed result state; an unknown execution is not settled.
+
+**Same-conversation owner release and successful `COMPLETE` require both `Q` and `A` for all intents**, plus uniquely corroborated conversation identity, no unaccounted input, an authoritative journaled terminal outcome and atomic fenced release. An `ISSUED` result without `OBSERVED_ACCEPTED` has `Q` *possibly true* but `A=false/unknown`; quarantine persists. If Gemini later renders the old result user turn, it must be **reconciled as old-Run evidence under its old publication identity only**, never processed as a fresh input for another Run, and release is still prohibited until all `Q/A` predicates are satisfied. No speculative waiting period can guarantee that an old message will never appear.
+
+**Cancel ACK requires the already specified stronger rule for a sent result**: `Q` and, for each issuance, `A` must both be proven (§5.6). When `ISSUED` has no accepted turn, cancellation remains `CANCEL_PENDING/INDETERMINATE`, not acknowledged; owner stays quarantined. `CANCEL_GATE_CLOSED` may still stop new effects. **An oracle-failed/refusal/invalid run with an otherwise fully settled history may be terminal BLOCKED and releasable** only under the same `Q/A` safe-release proof; terminal failure never means silent replay or counted success.
+
+Positive proof requires exact actor/document fate (no remaining runnable callbacks), owner-epoch fencing, a corroborated transcript and journaled publication identities, plus audited effect ordering. A user closing a tab or pressing Reset alone cannot establish whether a result reached Gemini. If any prior issuance remains acceptance-unknown, **no owner release or same-conversation automation reuse, potentially permanently**. A new, separately identified conversation remains subject to §5.8's installation-wide actor-quiescence safeguards. There is no manual override in Phase 0.
+
+**Typed failure codes for writing-plans:** `CONVERSATION_UNBOUND`, `INITIAL_PROMPT_MISMATCH`, `TURN_UNATTRIBUTABLE`, `ROLE_AMBIGUOUS`, `MODEL_NOT_COMPLETE`, `CALL_GRAMMAR_INVALID`, `MULTIPLE_CALL_CANDIDATES`, `MODEL_REFUSAL`, `FINAL_ORACLE_FAILED`, `FINAL_ORACLE_INDETERMINATE`, `AMBIGUOUS_CALL_SHAPE`, `SENDER_NOT_SINGLETON`, `COMPOSER_DIGEST_MISMATCH`, `PUBLICATION_UNKNOWN`, `PUBLICATION_ACCEPTANCE_UNKNOWN`, `OWNER_EPOCH_STALE`, `CANCEL_EFFECT_UNSETTLED`, `RECOVERY_QUARANTINED`. Preserve distinct `PERMIT_OUTSTANDING`, `UI_SEND_ISSUED`, and `OBSERVED_ACCEPTED`.
 
 
 ## 6. UI-safety and failure taxonomy
@@ -304,10 +362,13 @@ Positive proof requires: exact old actor/document fate (no remaining runnable ca
 | Duplicate publisher / effect listener or lost UI acknowledgment | Singleton/nonce gate: actual click at most once; `INDETERMINATE` without resend |
 | Cancel while send permit outstanding | Cancel remains **pending** until positive actor quiescence plus browser-visible result acceptance (or definitive `NOT_ISSUED`) |
 | Old owner epoch or another tab | Deny dispatch/send |
-| Gemini refuses tool grammar, wrong next tool, fabricated final data | Count failed scored attempt |
+| Gemini refusal or unrecognized contract, invalid/malformed call, or wrong next tool | §4.3 outcome classification; refusal/invalid cannot fall through to final success; count failed trial |
+| Normal completed final answer without a call | Enter `FINAL_EVALUATING`; oracle PASS and all Q/A obligations proven ⇒ `FINAL_ANSWER → COMPLETE`; else BLOCKED |
+| Evidence IDs present but fabricated numbers/resource claims | Oracle failure ⇒ `INVALID_OUTPUT / FINAL_ORACLE_FAILED`, terminal BLOCKED; no execution |
+| `ISSUED` but not `OBSERVED_ACCEPTED` even with quiescent actor | Acceptance unknown ⇒ `INDETERMINATE`, no Cancel ACK or same-conversation owner release |
 | Additional manual user input, initial prompt mismatch or regeneration | Invalidate predecessor binding; `BLOCKED` |
 | Composer digest mismatch / unverified singleton sender | No click; `BLOCKED` |
-| Permanently uncertain result publication | Quarantine old conversation; no manual retry or unsafe release |
+| Permanently uncertain result publication | Quarantine old conversation; no manual retry, owner release or reuse until **both actor quiescence Q and acceptance settlement A** are proven |
 | Extension permission/policy uncertain | No live browser run |
 
 Chrome extension uses least permissions and bundled scripts, no dynamic JS evaluation, no credential capture or external network for mocks. Logs store synthetic evidence identifiers/hashes and state transitions, not raw chat, personal data or company invoices.
@@ -318,10 +379,10 @@ Both evaluation variants run **the same prompt, tool catalog, extension logic an
 
 | Scenario | Evidence difference | Expected Gemini decision |
 | --- | --- | --- |
-| **S-A** | Synthetic suspicious costly EC2 (predefined resource and threshold) | Request `ec2.metrics` for the right resource; use its utilization and cost evidence; grounded conclusion |
-| **S-B** | Synthetic cost evidence justifies no EC2 follow-up | **Do not call** `ec2.metrics`; stop with supported negative conclusion |
+| **S-A** | Synthetic suspicious costly EC2 (predefined resource and threshold) | `TOOL_CALL(cost.summary)` → accepted result → `TOOL_CALL(ec2.metrics)` → accepted result → `FINAL_EVALUATING` → oracle PASS → `FINAL_ANSWER / COMPLETE` |
+| **S-B** | Synthetic cost evidence justifies no EC2 follow-up | `TOOL_CALL(cost.summary)` → accepted result → **zero call signatures** and substantive normal answer → `FINAL_EVALUATING` → oracle PASS → `FINAL_ANSWER / COMPLETE`, **without** `ec2.metrics` |
 
-Predefined **non-LLM oracle** requires matching actually executed evidence IDs, resource IDs, major costs/utilization, units and time window (within frozen tolerance), correct investigation decision and **zero material fabrication**. Machine-check structured facts where possible; freeze adjudication rubric for prose before trials. A correct-looking answer with fabricated numbers is a failure. An unnecessary S-B second call fails.
+Predefined **non-LLM oracle** requires matching actually executed evidence IDs, resource IDs, major costs/utilization, units and time window (within frozen tolerance), correct investigation decision and **zero material fabrication**. Machine-check structured facts where possible; freeze adjudication rubric for prose before trials. A correct-looking answer with fabricated numbers is a failure. An unnecessary S-B second call fails. **Merely not emitting a valid tool call is not evidence of FINAL_ANSWER**; malformed/ambiguous tool-like output, refusal and oracle failure are counted **failed** attempts, not completed Runs. Every formal trial records raw AssistantOutcome, oracle verdict, exact call counts, pending publication state, final terminal reason and inclusion in the immutable trial denominator.
 
 **Gate chronology (do not invert):** Spike Plan Gate approves the *evaluation manifest specification and collection procedure*, Execution Gate then authorizes mock implementation/unscored exploration, **Formal Evaluation Baseline Freeze** then commits and verifies the *actual built code, test harness, fixtures, prompts, protocol, oracle, trial plan and hashes*, **then** scored browser trials start. Any changes after freeze require a new campaign retaining prior pass/fail history.
 
@@ -339,15 +400,16 @@ Formal proof threshold inherited from Requirements: **S-A at least 10 live trial
 | DP-06 | **FR-08/20/21**, AC-02/06 | §5.5 single doc effect actor, duplicate listeners, exact composer digest, **actual click count** and lost ACK |
 | DP-07 | FR-17/19/21, AC-06/08 | §5.6 Cancel ACK after positive actor quiescence / observed acceptance; race forcing at **actual click** |
 | DP-08 | FR-01/08, AC-02/08 | No wrong-conversation send after navigation/owner change; exact result-user-turn causality |
-| DP-09 | FR-09/13/14, AC-02–04 | S-A and S-B different decisions from data, same controller; frozen oracle |
+| DP-09 | FR-09/11/13/14, AC-02–04/07 | §4.3 completed-turn outcome classification, S-A/S-B distinct `FINAL_EVALUATING → COMPLETE` paths, frozen oracle PASS and failure denominator |
 | DP-10 | FR-16/**FR-22**, AC-04/10/11 | Immutable built candidate only **after** Execution Gate, before scored trials |
 | DP-11 | NFR-01–17, AC-09/12 | No-network/read-only mock, synthetic trace, privileges/prompt injection audit |
 | DP-12 | FR-12, AC-10/11 | Versioned unit/fixture/integration/live evidence, manual recovery/quarantine trace, AC-level results |
 
 | DP-13 | FR-01/02/10, AC-01/05/08 | §3.1 fixed user-sent initial prompt after owner claim, exact prefill/message digest and first assistant predecessor |
-| DP-14 | FR-07/08/11/20/21, AC-06/08/12 | §5.8 positive-evidence manual recovery or permanent quarantine; no old effect replay |
+| DP-14 | FR-07/08/11/20/21, AC-06/08/12 | §5.8 **independent Q (actor quiescence) and A (result acceptance settlement)**, `ISSUED` alone blocks same-owner release, late acceptance and quarantine tests |
 | DP-15 | FR-03/04/15, AC-05/07 | §4.1 entire-message grammar, code example adversarial tests and Run context |
 | DP-16 | FR-05/06, AC-01/03/09 | Mock provider deterministic synthetic fixture provenance and actual call counts; **no network, credentials, filesystem or write effects** |
+| DP-17 | FR-03/04/09/11/13/14/15, AC-03/04/05/07/10 | §4.3 classifier precedence, call-shaped negatives, explicit refusal, final oracle and persisted single outcome; unit/fixture/MV3/live evidence with no extra provider/send |
 
 **DP-01, DP-02, DP-04, DP-06 and DP-07 are priority falsification targets.** The actual effect boundary and browser evidence must be validated independently; this draft does not claim them PROVEN.
 
@@ -356,13 +418,13 @@ Formal proof threshold inherited from Requirements: **S-A at least 10 live trial
 | Area | Selected hypothesis | Rejected / deferred |
 | --- | --- | --- |
 | Conversation lock | One transactional extension coordinator with durable conversation record | Tab-local boolean, non-atomic storage read/write, lease timeout takeover |
-| Model calls | Exact **whole-turn** code block with RunMarker/input correlation | Substring or example matching, permissive batch |
+| Model calls | Exact **whole-turn** code block with RunMarker/input correlation and **§4.3 strict outcome classification** | Substring or example matching, permissive batch, every non-call=final |
 | UI integration | Verified conversation and composer with one isolated-world singleton effect actor | Private Gemini API, multiple sender assumptions, guessed route/DOM |
 | Dispatch | Durable preclaim + bounded in-process deterministic mock | Retries following unknown outcome, arbitrary local commands |
 | Publication | Distinct durable intent, single-use nonce, exact composer digest and one synchronous `click()` | Execution dedupe alone, retry-on-timeout, ACK=delivery assumption |
 | Cancellation | Delay ACK until actor quiescence plus observed accepted result / definitive no-issuance | Immediate ACK on permit close, mere worker heartbeat |
 | Transport | No native local host in Phase 0 | Premature commitment to Native Messaging/MCP |
-| Evaluation | Two frozen contrast scenarios + deterministic oracle | Fixed happy-path controller, Gemini self-grading |
+| Evaluation | Two frozen contrast scenarios + deterministic oracle with `FINAL_EVALUATING → COMPLETE` only on PASS | Fixed happy-path controller, Gemini self-grading or invalid output treated as final |
 
 ### 9.1 Open blocking questions
 
@@ -374,7 +436,8 @@ Formal proof threshold inherited from Requirements: **S-A at least 10 live trial
 - **B-06 Permission:** Is company approval for installing and automating the extension documented prior to Execution Gate?
 - **B-07 Initial handoff:** Is the prefilled initial prompt exact and user-sent turn independently observable in Gemini Web?
 - **B-08 Singleton/async page behavior:** Can a single effect actor be proven amid reinjection/duplicate listeners and can page-side async send settle be observed?
-- **B-09 Recovery:** Can positive quiescence/reconciliation evidence be obtained? If not, old conversation stays quarantined.
+- **B-09 Recovery:** Can **both** positive actor quiescence Q and accepted/not-issued settlement A be established per effect? An `ISSUED` but acceptance-unknown result **always keeps the old conversation quarantined**, irrespective of Q alone.
+- **B-10 Outcome:** Can DOM structure and frozen structural call-signature scans classify model outputs without false final success? If not, no `COMPLETE`; DP-17 blocks the trial.
 
 If **B-01/B-02/B-03/B-07/B-08** cannot be justified with the approved UI/browser constraints, they are **Major design blockers**, not excuses to weaken Requirements.
 
@@ -386,9 +449,10 @@ If **B-01/B-02/B-03/B-07/B-08** cannot be justified with the approved UI/browser
 | RG-003-DES-002 | Major | §3.2–3.3: conversation proof, predecessor input, role and completion | B-02/B-03, DP-01/02 |
 | RG-003-DES-003 | Major | §4.1: entire-turn grammar, exact normalization, ambiguous sample | B-05, DP-03/15 |
 | RG-003-DES-004 | Major | §3.1: one user-sent initial prompt, exclusive owner and first-turn linkage | B-07, DP-13 |
-| RG-003-DES-005 | Minor | §5.8: no-reset/no-replay, positive-evidence recovery or permanent quarantine | B-09, DP-14 |
+| RG-003-DES-005 | Minor (PARTIALLY RESOLVED in prior review) | §5.5/5.6/5.8: **Q actor quiescence and A acceptance are independent**; `ISSUED` alone cannot release same-conversation owner | B-09, DP-14 |
+| RG-003-DES-006 | Major (NEW) | §4.3/§5.2/§7: deterministic four-way AssistantOutcome, invalid-call precedence, oracle-gated final success / complete terminal | B-10, DP-09/17 |
 
-**All five are author-addressed, not independently RESOLVED. Design Gate remains BLOCKED until a fresh independent Design Review of the exact new committed baseline.**
+**Review history:** The prior independent review marked DES-001–004 RESOLVED, DES-005 PARTIALLY RESOLVED and identified DES-006 as NEW Major. **The author has addressed DES-005/006 in this revision, not independently verified closure.** Design Gate remains BLOCKED until a fresh independent review of the exact new committed baseline.
 
 ## 10. Review gates and authorization limits
 
@@ -405,8 +469,9 @@ If **B-01/B-02/B-03/B-07/B-08** cannot be justified with the approved UI/browser
 - Is the **last actual UI send issuance** protected from cancel acknowledgment races, not merely a background permission check?
 - Does the distinct `PublicationIntent` guarantee at-most-once **issuance**, including duplicates and lost acknowledgments, without claiming exactly-once delivery?
 - Are completion/identity browser observations sufficient, or does the design implicitly rely on unstable guesses?
-- Can S-A/S-B and a frozen oracle distinguish model-chosen actions from extension-scripted steps?
+- Can S-A/S-B and a frozen oracle distinguish model-chosen actions from extension-scripted steps, and does **§4.3 only classify a final answer after oracle PASS**?
+- Does a quiescent sender with `ISSUED` but unconfirmed acceptance **remain quarantined**, with no Cancel ACK or same-conversation owner release?
 - Do all AC-01–12 have credible test evidence and clear BLOCKED conditions?
 - Are permissions/policy and phase gates respected, with no implementation before approval?
 
-**Author self-review is not independent approval.** The Implementation/Spike Plan does **not** exist yet; its future writing-plans handoff must adopt the exact identities, error codes, event boundaries, failure categories and DP-01–16 evidence definitions in this Design, not invent substitutes. **No source files, extension code, AWS credentials or live Gemini automation are authorized or created by this document.**
+**Author self-review is not independent approval.** The Implementation/Spike Plan does **not** exist yet; its future writing-plans handoff must adopt the exact identities, error codes, event boundaries, failure categories and DP-01–17 evidence definitions in this Design, not invent substitutes. **No source files, extension code, AWS credentials or live Gemini automation are authorized or created by this document.**
