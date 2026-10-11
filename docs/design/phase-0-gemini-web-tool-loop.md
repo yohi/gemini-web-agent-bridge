@@ -347,6 +347,7 @@ Formal proof threshold inherited from Requirements: **S-A at least 10 live trial
 | DP-13 | FR-01/02/10, AC-01/05/08 | §3.1 fixed user-sent initial prompt after owner claim, exact prefill/message digest and first assistant predecessor |
 | DP-14 | FR-07/08/11/20/21, AC-06/08/12 | §5.8 positive-evidence manual recovery or permanent quarantine; no old effect replay |
 | DP-15 | FR-03/04/15, AC-05/07 | §4.1 entire-message grammar, code example adversarial tests and Run context |
+| DP-16 | FR-05/06, AC-01/03/09 | Mock provider deterministic synthetic fixture provenance and actual call counts; **no network, credentials, filesystem or write effects** |
 
 **DP-01, DP-02, DP-04, DP-06 and DP-07 are priority falsification targets.** The actual effect boundary and browser evidence must be validated independently; this draft does not claim them PROVEN.
 
@@ -408,4 +409,4 @@ If **B-01/B-02/B-03/B-07/B-08** cannot be justified with the approved UI/browser
 - Do all AC-01–12 have credible test evidence and clear BLOCKED conditions?
 - Are permissions/policy and phase gates respected, with no implementation before approval?
 
-**Author self-review is not independent approval. No source files, extension code, AWS credentials or live Gemini automation are authorized or created by this document.**
+**Author self-review is not independent approval.** The Implementation/Spike Plan does **not** exist yet; its future writing-plans handoff must adopt the exact identities, error codes, event boundaries, failure categories and DP-01–16 evidence definitions in this Design, not invent substitutes. **No source files, extension code, AWS credentials or live Gemini automation are authorized or created by this document.**
